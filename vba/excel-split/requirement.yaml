@@ -1,0 +1,50 @@
+requirement:
+  file_type: excel
+  program_language: python
+  sheets:
+  - id: source
+    name: "工资"
+  - id: destination
+    name: "工资拆分"
+  - id: reference
+    name: "工时"
+  rules:
+    from_sheet:
+      id: source
+    to_sheet:
+      id: destination
+    titles:
+      immutable: true
+    splitting_columns:
+    - "基本工资"
+    - "岗位工资"
+    splitting_by_column: reference-project-hours
+  columns:
+  - column_id: reference-employee-id
+    sheet_id: reference
+    column_name: "工号"
+  - column_id: reference-project-id
+    sheet_id: reference
+    column_name: "项目编号"
+  - column_id: reference-project-categary
+    sheet_id: reference
+    column_name: "项目分类"
+  - column_id: reference-project-hours
+    sheet_id: reference
+    column_name: "工时"
+  - column_id: source-employee-id
+    sheet_id: source
+    column_name: "员工编号"
+  - column_id: source-project-id
+    sheet_id: source
+    column_name: "费用所属中心"
+    from_column: reference-project-id
+    desciption: "Remain unchanged if there is not the employee in reference sheet"
+  - column_id: source-project-categary
+    sheet_id: source
+    column_name: "费用分类"
+    from_column: reference-project-categary
+    desciption: "Remain unchanged if there is not the employee in reference sheet"
+  column_maps:
+  - source-employee-id
+    reference-employee-id
