@@ -3,7 +3,7 @@ requirement:
   input_file_title: 项目成本.xslx
   output_file_type: excel
   output_file_title: 项目成本拆分.xslx
-  program_language: vba
+  program_language: python
   sheets:
   - id: source
     name: "工资"
