@@ -1,0 +1,171 @@
+import argparse
+import yaml
+import copy
+from collections import defaultdict
+from openpyxl import load_workbook, Workbook
+from openpyxl.styles import Font, Border, Side, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Split project cost data based on reference.')
+    parser.add_argument('--config', type=str, default='config.yaml', help='Path to the configuration file.')
+    parser.add_argument('--input', type=str, help='Input Excel file path.')
+    parser.add_argument('--output', type=str, help='Output Excel file path.')
+    return parser.parse_args()
+
+
+def load_config(config_path, args):
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+    if args.input:
+        config['input']['path'] = args.input
+    if args.output:
+        config['output']['path'] = args.output
+    return config
+
+
+def get_column_index(sheet, column_name):
+    for cell in sheet[1]:
+        if cell.value == column_name:
+            return cell.column
+    raise ValueError(f"Column '{column_name}' not found in sheet {sheet.title}")
+
+
+def validate_reference_sheet(reference_sheet, project_hours_col_idx):
+    for row in reference_sheet.iter_rows(min_row=2):
+        hours_cell = row[project_hours_col_idx - 1]
+        if hours_cell.value is None or hours_cell.value <= 0:
+            raise ValueError(f"Invalid project_hours value in row {row[0].row}")
+
+
+def copy_cell_style(src_cell, dst_cell):
+    """Deep copy cell style attributes"""
+    if src_cell.font:
+        dst_cell.font = copy.copy(src_cell.font)
+    if src_cell.border:
+        dst_cell.border = copy.copy(src_cell.border)
+    if src_cell.fill:
+        dst_cell.fill = copy.copy(src_cell.fill)
+    if src_cell.number_format:
+        dst_cell.number_format = src_cell.number_format
+    if src_cell.alignment:
+        dst_cell.alignment = copy.copy(src_cell.alignment)
+    if src_cell.protection:
+        dst_cell.protection = copy.copy(src_cell.protection)
+
+
+def process_sheet(config, source_sheet, reference_sheet):
+    # Get column names from config
+    source_cols = config['input']['sheet']['source']['columns']
+    reference_cols = config['input']['sheet']['reference']['columns']
+    splitting_cols = config['input']['splitting_columns']
+
+    # Validate splitting columns exist
+    for col in splitting_cols:
+        if not any(cell.value == col for cell in source_sheet[1]):
+            raise ValueError(f"Splitting column '{col}' not found in source sheet")
+
+    # Get column indices
+    source_employee_col = get_column_index(source_sheet, source_cols['employee_id'])
+    source_project_id_col = get_column_index(source_sheet, source_cols['project_id'])
+    source_project_category_col = get_column_index(source_sheet, source_cols['project_category'])
+    source_project_hours_col = get_column_index(source_sheet, source_cols['project_hours'])
+
+    ref_employee_col = get_column_index(reference_sheet, reference_cols['employee_id'])
+    ref_project_id_col = get_column_index(reference_sheet, reference_cols['project_id'])
+    ref_project_category_col = get_column_index(reference_sheet, reference_cols['project_category'])
+    ref_project_hours_col = get_column_index(reference_sheet, reference_cols['project_hours'])
+    validate_reference_sheet(reference_sheet, ref_project_hours_col)
+
+    # Preprocess reference data
+    reference_data = defaultdict(list)
+    for row in reference_sheet.iter_rows(min_row=2):
+        employee_id = row[ref_employee_col - 1].value
+        reference_data[employee_id].append({
+            'project_id': row[ref_project_id_col - 1].value,
+            'project_category': row[ref_project_category_col - 1].value,
+            'project_hours': row[ref_project_hours_col - 1].value
+        })
+
+    # Prepare result sheet
+    result_wb = Workbook()
+    result_sheet = result_wb.active
+    result_sheet.title = config['output']['sheet']['result']['name']
+
+    # Copy header row with styles
+    header_row = [cell.value for cell in source_sheet[1]]
+    result_sheet.append(header_row)
+    for col_idx, source_cell in enumerate(source_sheet[1], 1):
+        result_cell = result_sheet.cell(row=1, column=col_idx)
+        copy_cell_style(source_cell, result_cell)
+
+    # Process data rows
+    splitting_col_indices = [get_column_index(source_sheet, col) for col in splitting_cols]
+
+    for src_row in source_sheet.iter_rows(min_row=2):
+        employee_id = src_row[source_employee_col - 1].value
+        ref_records = reference_data.get(employee_id)
+
+        if not ref_records:
+            # Copy original row with styles
+            new_row = [cell.value for cell in src_row]
+            result_sheet.append(new_row)
+            for col_idx, src_cell in enumerate(src_row, 1):
+                result_cell = result_sheet.cell(row=result_sheet.max_row, column=col_idx)
+                copy_cell_style(src_cell, result_cell)
+        else:
+            total_hours = sum(r['project_hours'] for r in ref_records)
+            for record in ref_records:
+                new_row = [cell.value for cell in src_row]
+                # Update project fields
+                new_row[source_project_id_col - 1] = record['project_id']
+                new_row[source_project_category_col - 1] = record['project_category']
+                new_row[source_project_hours_col - 1] = record['project_hours']
+
+                # Apply splitting ratio
+                ratio = record['project_hours'] / total_hours
+                for col_idx in splitting_col_indices:
+                    original_value = new_row[col_idx - 1] or 0
+                    new_row[col_idx - 1] = original_value * ratio
+
+                # Add to result and copy styles
+                result_sheet.append(new_row)
+                for col_idx, src_cell in enumerate(src_row, 1):
+                    result_cell = result_sheet.cell(row=result_sheet.max_row, column=col_idx)
+                    copy_cell_style(src_cell, result_cell)
+
+    # Copy column widths
+    for col in source_sheet.columns:
+        col_letter = get_column_letter(col[0].column)
+        result_sheet.column_dimensions[col_letter].width = source_sheet.column_dimensions[col_letter].width
+
+    return result_wb
+
+
+def main():
+    try:
+        args = parse_args()
+        config = load_config(args.config, args)
+
+        # Load input workbook
+        input_wb = load_workbook(config['input']['path'])
+
+        # Get sheets
+        source_sheet = input_wb[config['input']['sheet']['source']['name']]
+        reference_sheet = input_wb[config['input']['sheet']['reference']['name']]
+
+        # Process data
+        result_wb = process_sheet(config, source_sheet, reference_sheet)
+
+        # Save output
+        result_wb.save(config['output']['path'])
+        print("Processing completed successfully.")
+
+    except Exception as e:
+        print(f"Error occurred: {str(e)}")
+        exit(1)
+
+
+if __name__ == '__main__':
+    main()

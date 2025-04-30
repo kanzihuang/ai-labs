@@ -1,41 +1,76 @@
-def test_case1(self):
-    # 构造source和reference数据
-    source_data = {
-        '工号': ['001'],
-        '费用所属中心': ['中心A'],
-        '费用类别': ['类别X'],
-        '实际出勤': [20],
-        '基本工资': [1000],
-        '岗位工资': [2000]
-    }
-    source_df = pd.DataFrame(source_data)
-    reference_data = {
-        '工号': ['001', '001'],
-        '费用所属中心': ['中心B', '中心C'],
-        '费用类别': ['类别Y', '类别Z'],
-        '实际出勤': [10, 30]
-    }
-    reference_df = pd.DataFrame(reference_data)
-    # 保存到Excel文件
-    input_path = os.path.join(self.test_dir, 'test_input.xlsx')
-    with pd.ExcelWriter(input_path, engine='openpyxl') as writer:
-        source_df.to_excel(writer, sheet_name='工资', index=False)
-        reference_df.to_excel(writer, sheet_name='工时', index=False)
-    # 运行处理函数
-    process_data(input_path, '工资', '工时', 'test_output.xlsx', '工资拆分', ['基本工资', '岗位工资'])
-    # 读取结果并验证
-    result_df = pd.read_excel('test_output.xlsx', sheet_name='工资拆分')
-    self.assertEqual(len(result_df), 2)
-    # 检查第一行的数据
-    row1 = result_df.iloc[0]
-    self.assertEqual(row1['工号'], '001')
-    self.assertEqual(row1['费用所属中心'], '中心B')
-    self.assertEqual(row1['基本工资'], 250)
-    self.assertEqual(row1['岗位工资'], 500)
-    # 检查第二行
-    row2 = result_df.iloc[1]
-    self.assertEqual(row2['费用所属中心'], '中心C')
-    self.assertEqual(row2['基本工资'], 750)
-    self.assertEqual(row2['岗位工资'], 1500)
+import pytest
+import pandas as pd
+import os
 
-# 其他测试用例类似
+
+def test_full_process(tmp_path):
+    # Create test data
+    test_data = {
+        'source': pd.DataFrame({
+            '工号': [1, 2, 3],
+            '费用所属中心': ['A', 'B', 'C'],
+            '费用类别': ['X', 'Y', 'Z'],
+            '实际出勤': [10, 20, 30],
+            '基本工资': [1000, 2000, 3000],
+            '岗位工资': [500, 600, 700]
+        }),
+        'reference': pd.DataFrame({
+            '工号': [1, 1, 2],
+            '费用所属中心': ['A1', 'A2', 'B1'],
+            '费用类别': ['X1', 'X2', 'Y1'],
+            '实际出勤': [4, 6, 20]
+        })
+    }
+
+    # Save test files
+    input_path = tmp_path / "test_input.xlsx"
+    with pd.ExcelWriter(input_path) as writer:
+        test_data['source'].to_excel(writer, sheet_name='工资', index=False)
+        test_data['reference'].to_excel(writer, sheet_name='工时', index=False)
+
+    # Run program
+    config = {
+        'input': {
+            'path': str(input_path),
+            'sheet': {
+                'source': {'name': '工资', 'columns': {
+                    'employee_id': '工号',
+                    'project_id': '费用所属中心',
+                    'project_category': '费用类别',
+                    'project_hours': '实际出勤'}},
+                'reference': {'name': '工时', 'columns': {
+                    'employee_id': '工号',
+                    'project_id': '费用所属中心',
+                    'project_category': '费用类别',
+                    'project_hours': '实际出勤'}}
+            },
+            'splitting_columns': ['基本工资', '岗位工资']
+        },
+        'output': {
+            'path': str(tmp_path / "output.xlsx"),
+            'sheet': {'result': {'name': '工资拆分'}}
+        }
+    }
+
+    # Save config
+    config_path = tmp_path / "test_config.yaml"
+    with open(config_path, 'w') as f:
+        yaml.dump(config, f)
+
+    # Execute
+    os.system(f"python split_cost.py --config {config_path}")
+
+    # Verify results
+    result = pd.read_excel(config['output']['path'], sheet_name='工资拆分')
+
+    # Validate splitting logic
+    expected = pd.DataFrame({
+        'employee_id': [1, 1, 2, 3],
+        'project_id': ['A1', 'A2', 'B1', 'C'],
+        'project_category': ['X1', 'X2', 'Y1', 'Z'],
+        'project_hours': [4, 6, 20, 30],
+        '基本工资': [400.0, 600.0, 2000.0, 3000.0],
+        '岗位工资': [200.0, 300.0, 600.0, 700.0]
+    })
+
+    pd.testing.assert_frame_equal(result, expected)

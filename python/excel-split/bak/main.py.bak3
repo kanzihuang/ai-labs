@@ -44,22 +44,6 @@ def copy_style(source_cell, target_cell):
     target_cell.number_format = source_cell.number_format
 
 
-def get_column_indices(sheet, columns_config, required_columns=None):
-    """获取列索引，仅检查required_columns中的列是否存在"""
-    header = [cell.value for cell in sheet[1]]  # 获取表头值列表
-    indices = {}
-    for key, col_name in columns_config.items():
-        if col_name not in header:
-            if required_columns and key in required_columns:
-                print(f"错误：列 {col_name} 不存在于工作表 {sheet.title}")
-                sys.exit(1)
-            else:
-                indices[key] = None  # 标记列不存在
-        else:
-            indices[key] = header.index(col_name) + 1  # 转为1-based
-    return indices
-
-
 def main():
     # 解析命令行参数
     parser = argparse.ArgumentParser(description='Excel数据拆分工具')
@@ -96,13 +80,18 @@ def main():
     reference_sheet = wb[reference_sheet_name]
 
     # 解析列配置
-    # 处理source表，仅强制检查employee_id列存在
-    source_columns_config = config['input']['sheet']['source']['columns']
-    source_cols = get_column_indices(source_sheet, source_columns_config, required_columns=['employee_id'])
+    def get_column_indices(sheet, columns_config):
+        header = [cell.value for cell in sheet[1]]  # 获取表头值列表
+        indices = {}
+        for key, col_name in columns_config.items():
+            if col_name not in header:
+                print(f"错误：列 {col_name} 不存在于工作表 {sheet.title}")
+                sys.exit(1)
+            indices[key] = header.index(col_name) + 1  # 转为1-based
+        return indices
 
-    # 处理reference表，强制检查所有列存在
-    ref_columns_config = config['input']['sheet']['reference']['columns']
-    ref_cols = get_column_indices(reference_sheet, ref_columns_config, required_columns=ref_columns_config.keys())
+    source_cols = get_column_indices(source_sheet, config['input']['sheet']['source']['columns'])
+    ref_cols = get_column_indices(reference_sheet, config['input']['sheet']['reference']['columns'])
 
     # 获取源表头并验证拆分列
     source_header = [cell.value for cell in source_sheet[1]]
@@ -170,12 +159,12 @@ def main():
                 for col_idx, src_cell in enumerate(src_row, start=1):
                     target_cell = output_sheet.cell(row=new_row_num, column=col_idx)
 
-                    # 处理特殊列，如果列存在
-                    if source_cols.get('project_id') and col_idx == source_cols['project_id']:
+                    # 处理特殊列
+                    if col_idx == source_cols['project_id']:
                         value = ref['project_id']
-                    elif source_cols.get('project_category') and col_idx == source_cols['project_category']:
+                    elif col_idx == source_cols['project_category']:
                         value = ref['project_category']
-                    elif source_cols.get('project_hours') and col_idx == source_cols['project_hours']:
+                    elif col_idx == source_cols['project_hours']:
                         value = ref['project_hours']
                     elif src_cell.value is None:
                         value = None
