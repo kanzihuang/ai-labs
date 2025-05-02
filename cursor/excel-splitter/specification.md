@@ -34,3 +34,7 @@ output:
 ## 规则
 
 - 将表source内容复制到表result，表result的表头、数据和格式与表source相同
+
+## 单元测试
+
+- 测试生成的表result的表头、数据和格式与表source是否相同
