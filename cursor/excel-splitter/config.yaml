@@ -8,6 +8,16 @@ input:
         project_id: "费用所属中心"
         project_category: "费用类别"
         project_hours: "实际出勤"
+    reference:
+      name: "研发人员工时表"
+      columns:
+        employee_id: "工号"
+        project_id: "费用所属中心"
+        project_category: "费用类别"
+        project_hours: "实际出勤"
+  splitting_columns:
+  - 基本工资
+  - 岗位工资
 output:
   path: "output/项目成本拆分.xlsx"
   sheet:
