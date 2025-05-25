@@ -7,7 +7,7 @@ import sys
 import yaml
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
-from copy import copy
+from copy import copy, deepcopy
 
 def load_config(config_path):
     """Load configuration from YAML file."""
@@ -63,15 +63,16 @@ def split_row(source_row, reference_rows, source_headers, reference_headers, con
         return [source_row]
 
     # Split the row
+    remain_row = deepcopy(source_row)
     result_rows = []
-    for ref_row in matching_ref_rows:
+    for i, ref_row in enumerate(matching_ref_rows):
         ref_hours_col = get_column_index(reference_headers, config['input']['sheet']['reference']['columns']['project_hours'])
         ref_hours = float(ref_row[ref_hours_col - 1].value)
         ratio = ref_hours / total_ref_hours  # 根据reference表中的总工时计算比例
 
         # Create new row with same style as source
         new_row = []
-        for cell in source_row:
+        for j, cell in enumerate(source_row):
             new_cell = copy(cell)
             if cell.value is not None and cell.column in [
                 get_column_index(source_headers, col_name)
@@ -79,7 +80,12 @@ def split_row(source_row, reference_rows, source_headers, reference_headers, con
             ]:
                 # Split numeric values
                 try:
-                    new_cell.value = float(cell.value) * ratio
+                    # new_cell.value = round(float(cell.value) * ratio, 2)
+                    if i < len(matching_ref_rows) - 1 :
+                        new_cell.value = round(float(cell.value) * ratio, 2)
+                        remain_row[j].value -= new_cell.value
+                    else:
+                        new_cell.value = remain_row[j].value
                 except (ValueError, TypeError):
                     new_cell.value = cell.value
             new_row.append(new_cell)

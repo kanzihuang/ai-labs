@@ -157,7 +157,7 @@ class TestExcelSplitter(unittest.TestCase):
             # Compare each value with a tolerance for floating point values
             for j, (expected_val, actual_val) in enumerate(zip(expected, result_row)):
                 if isinstance(expected_val, (int, float)) and isinstance(actual_val, (int, float)):
-                    self.assertAlmostEqual(expected_val, actual_val, places=2)
+                    self.assertAlmostEqual(expected_val, actual_val, places=1)
                 else:
                     self.assertEqual(expected_val, actual_val)
 

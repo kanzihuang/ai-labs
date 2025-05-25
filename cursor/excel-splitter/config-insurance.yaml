@@ -1,0 +1,48 @@
+input:
+  path: "input/拆分模版4.28.xlsx"
+  sheet:
+    source:
+      name: "社保"
+      columns:
+        employee_id: "工号"
+        project_id: "费用所属中心"
+        project_category: "费用类别"
+        project_hours: "实际出勤"
+    reference:
+      name: "研发人员工时表"
+      columns:
+        employee_id: "工号"
+        project_id: "费用所属中心"
+        project_category: "费用类别"
+        project_hours: "实际出勤"
+  splitting_columns:
+  - "养老保险企业缴纳金额"
+  - "养老保险个人缴纳金额"
+  - "失业保险企业缴纳金额"
+  - "失业保险个人缴纳金额"
+  - "工伤保险缴费合计"
+  - "生育保险缴费合计"
+  - "四险企业缴纳合计"
+  - "四险个人缴纳合计"
+  - "医疗保险企业缴纳金额"
+  - "医疗保险个人缴纳金额"
+  - "五险企业缴纳合计"
+  - "五险个人缴纳合计"
+  - "公积金企业缴纳金额"
+  - "公积金个人缴纳金额"
+  - "残疾保障金企业金额"
+  - "服务费"
+  - "企业缴纳合计"
+  - "个人缴纳合计"
+  - "缴费合计"
+  - "易才企业小计"
+  - "北京企业小计"
+  - "易才个人缴纳"
+  - "北京个人小计"
+  - "易才个人缴纳"
+  - "北京个人小计"
+output:
+  path: "output/社保拆分.xlsx"
+  sheet:
+    result:
+      name: "社保拆分"
