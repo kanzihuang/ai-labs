@@ -14,9 +14,8 @@ WORKDIR /app
 
 # 只拷贝加密后的配置和脚本
 COPY conf_encrypted/ conf_encrypted/
-COPY curl-batch.sh decrypt-configs.sh .
+COPY curl-batch.sh decrypt-configs.sh entrypoint.sh .
 
-RUN chmod +x curl-batch.sh decrypt-configs.sh
+RUN chmod +x curl-batch.sh decrypt-configs.sh entrypoint.sh
 
-# 入口脚本：先解密，再执行主脚本
-ENTRYPOINT ["/bin/bash", "-c", "./decrypt-configs.sh && ./curl-batch.sh \"$@\""]
+ENTRYPOINT ["/app/entrypoint.sh"]
