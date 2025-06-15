@@ -1,0 +1,59 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Excel Splitter Testing Guide
+
+## Test Cases Overview
+
+The Excel Splitter test suite in [test_excel_splitter.py](mdc:test_excel_splitter.py) implements test cases based on the scenarios described in [specification.md](mdc:specification.md).
+
+## Test Setup
+
+Each test follows this pattern:
+1. Create test Excel files with pre-defined data
+2. Execute the `process_excel` function with test configuration
+3. Load the result Excel file and verify its contents
+4. Clean up temporary test files
+
+## Key Test Cases
+
+### Header Consistency Test
+
+Verifies that headers in the result sheet match those in the source sheet:
+```python
+def test_headers_match(self):
+    # Test implementation in test_excel_splitter.py
+```
+
+### Direct Copy Test
+
+Verifies that when no matching reference data exists, the source row is copied directly:
+```python
+def test_copy_row_without_reference(self):
+    # Test implementation in test_excel_splitter.py
+```
+
+### Splitting Test
+
+Verifies that when matching reference data exists, the row is split correctly:
+```python
+def test_split_row_with_reference(self):
+    # Test implementation in test_excel_splitter.py
+```
+
+## Writing New Tests
+
+When adding new test cases:
+1. Follow the same setup/teardown pattern used in existing tests
+2. Create unique test file names to avoid conflicts
+3. Verify both the structure and content of the result
+4. Test edge cases (empty cells, zero values, etc.)
+5. Ensure test case names clearly describe what's being tested
+
+## Common Testing Issues
+
+- Floating-point comparisons: Use assertAlmostEqual for comparing split values
+- Excel file access conflicts: Make sure to close workbooks with wb.close()
+- File cleanup: Use tearDown to ensure test files are removed even if tests fail

@@ -1,0 +1,46 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Excel Splitter Project Guide
+
+## Project Structure
+
+The Excel Splitter is a Python tool that splits Excel spreadsheets according to specific rules.
+
+- [main.py](mdc:main.py) - Main entry point containing core functionality
+- [test_excel_splitter.py](mdc:test_excel_splitter.py) - Unit tests for the application
+- [config.yaml](mdc:config.yaml) - Configuration file with settings for input/output paths and column mappings
+- [requirements.txt](mdc:requirements.txt) - Project dependencies
+
+## Key Components
+
+### Main Processing Functions
+
+The core functionality is in [main.py](mdc:main.py), with these key functions:
+
+- `process_excel()` - Main function that handles the Excel file processing
+- `split_row()` - Function that performs the actual row splitting based on the reference data
+- `validate_sheets()` - Validates that all required sheets and columns exist
+
+### Configuration
+
+All settings are stored in [config.yaml](mdc:config.yaml), which defines:
+- Input and output file paths
+- Sheet names for source, reference, and result data
+- Column mappings between source and reference sheets
+- Columns that should be split
+
+### Project Requirements
+
+The application depends on several Python libraries defined in [requirements.txt](mdc:requirements.txt):
+- openpyxl - For Excel file operations
+- PyYAML - For parsing configuration files
+
+## Development Guidelines
+
+1. When adding new features, start by adding tests in [test_excel_splitter.py](mdc:test_excel_splitter.py)
+2. Follow the documentation in [README.md](mdc:README.md) for understanding the splitting rules
+3. All code should follow PEP 8 style guide with proper docstrings
+4. Configuration changes should be documented in both the config file and README

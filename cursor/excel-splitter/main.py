@@ -4,6 +4,7 @@
 import argparse
 import os
 import sys
+import traceback
 import yaml
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
@@ -15,8 +16,7 @@ def load_config(config_path):
         with open(config_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
     except Exception as e:
-        print(f"Error loading config file: {e}")
-        sys.exit(1)
+        fatal(f"Error loading config file: {e}")
 
 def copy_cell_style(source_cell, target_cell):
     """Copy cell style from source to target cell."""
@@ -80,14 +80,13 @@ def split_row(source_row, reference_rows, source_headers, reference_headers, con
             ]:
                 # Split numeric values
                 try:
-                    # new_cell.value = round(float(cell.value) * ratio, 2)
                     if i < len(matching_ref_rows) - 1 :
                         new_cell.value = round(float(cell.value) * ratio, 2)
                         remain_row[j].value -= new_cell.value
                     else:
                         new_cell.value = remain_row[j].value
                 except (ValueError, TypeError):
-                    new_cell.value = cell.value
+                    fatal(f"Error: 无法拆分'{source_headers[j]}:{source_row[j].value}'")
             new_row.append(new_cell)
 
         # 只更新project_id, project_category, project_hours这三列
@@ -119,11 +118,9 @@ def validate_sheets(config, wb):
     
     # Check if sheets exist
     if source_sheet not in wb.sheetnames:
-        print(f"Error: Source sheet '{source_sheet}' does not exist")
-        sys.exit(1)
+        fatal(f"Error: Source sheet '{source_sheet}' does not exist")
     if reference_sheet not in wb.sheetnames:
-        print(f"Error: Reference sheet '{reference_sheet}' does not exist")
-        sys.exit(1)
+        fatal(f"Error: Reference sheet '{reference_sheet}' does not exist")
 
     source = wb[source_sheet]
     reference = wb[reference_sheet]
@@ -138,14 +135,12 @@ def validate_sheets(config, wb):
     }
     for col_id, col_name in required_source_columns.items():
         if col_name not in source_headers:
-            print(f"Error: Required column '{col_name}' not found in source sheet")
-            sys.exit(1)
+            fatal(f"Error: Required column '{col_name}' not found in source sheet")
 
     # Validate splitting columns in source sheet
     for col_name in config['input']['splitting_columns']:
         if col_name not in source_headers:
-            print(f"Error: Splitting column '{col_name}' not found in source sheet")
-            sys.exit(1)
+            fatal(f"Error: Splitting column '{col_name}' not found in source sheet")
 
     # Validate required columns in reference sheet
     required_ref_columns = {
@@ -156,8 +151,7 @@ def validate_sheets(config, wb):
     }
     for col_id, col_name in required_ref_columns.items():
         if col_name not in reference_headers:
-            print(f"Error: Required column '{col_name}' not found in reference sheet")
-            sys.exit(1)
+            fatal(f"Error: Required column '{col_name}' not found in reference sheet")
 
     return source, reference, source_headers, reference_headers
 
@@ -169,8 +163,7 @@ def process_excel(config):
 
     # Check if input file exists
     if not os.path.exists(input_path):
-        print(f"Error: Input file '{input_path}' does not exist")
-        sys.exit(1)
+        fatal(f"Error: Input file '{input_path}' does not exist")
 
     try:
         # Load the workbook
@@ -219,11 +212,16 @@ def process_excel(config):
         output_wb.save(output_path)
         
     except InvalidFileException:
-        print(f"Error: Invalid Excel file '{input_path}'")
-        sys.exit(1)
+        traceback.print_exc()
+        fatal(f"Error: Invalid Excel file '{input_path}'")
     except Exception as e:
-        print(f"Error processing Excel file: {e}")
-        sys.exit(1)
+        traceback.print_exc()
+        fatal(f"Error processing Excel file: {e}")
+
+def fatal(message):
+    print(message)
+    input("执行失败，按回车键退出")
+    sys.exit(1)
 
 def main():
     # Set up argument parser
@@ -236,6 +234,9 @@ def main():
     
     # Process Excel file
     process_excel(config)
+
+    input("执行成功，按回车键退出")
+
 
 if __name__ == '__main__':
     main() 

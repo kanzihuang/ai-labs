@@ -1,0 +1,49 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Excel Splitting Logic Guide
+
+## Splitting Rules
+
+The Excel Splitter follows specific rules defined in [specification.md](mdc:specification.md) to split salary data across multiple rows based on reference data.
+
+## Split Row Function
+
+The core of the splitting logic is in the `split_row()` function in [main.py](mdc:main.py). Here's how it works:
+
+1. Match source row with reference rows using employee ID
+2. If no match is found, copy the source row as-is to the result
+3. If matches are found:
+   - Calculate total reference hours across all matching rows
+   - For each matching reference row:
+     - Calculate the ratio based on project hours
+     - Create a new row copying most cells from the source row
+     - Update specific columns (project_id, project_category, project_hours) from reference data
+     - Split columns defined in `splitting_columns` by multiplying by the calculated ratio
+
+## Column Mapping
+
+Column mapping is critical to understand:
+
+- The `employee_id` column is used to match rows between source and reference sheets
+- The splitting columns (typically salary fields) are defined in `config.yaml` under `input.splitting_columns`
+- Three columns are always updated from reference data: project_id, project_category, and project_hours
+- All other columns are copied unchanged from the source
+
+## Validation Logic
+
+Before processing, [main.py](mdc:main.py) validates:
+
+1. Required sheets exist in the workbook
+2. Required columns exist in both source and reference sheets
+3. Splitting columns exist in the source sheet
+
+## Testing Approach
+
+The [test_excel_splitter.py](mdc:test_excel_splitter.py) file contains tests that verify:
+
+1. Headers match between source and result sheets
+2. Rows copy correctly when no reference match exists
+3. Rows split correctly when reference matches exist with proper column values
