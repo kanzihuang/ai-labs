@@ -11,7 +11,8 @@ curl() {
 }
 
 main() {
-    config_dir="$(cd "$(dirname "$0")/conf" && pwd)"
+    # 配置目录改为解密后的 conf_decrypted
+    config_dir="$(cd "$(dirname "$0")/conf_decrypted" && pwd)"
     sites=()
     # 解析参数
     while [[ $# -gt 0 ]]; do

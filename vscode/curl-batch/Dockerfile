@@ -1,22 +1,22 @@
 # 使用官方轻量级 Debian 镜像
 FROM debian:stable-slim
 
-# 安装 bash、curl 和 ca-certificates
+# 安装 bash、curl、openssl、ca-certificates
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         bash \
-        ca-certificates \ 
-        curl && \
+        curl \
+        openssl \
+        ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-# 设置工作目录
 WORKDIR /app
 
-# 拷贝当前目录所有内容到容器中
-COPY . /app
+# 只拷贝加密后的配置和脚本
+COPY conf_encrypted/ conf_encrypted/
+COPY curl-batch.sh decrypt-configs.sh .
 
-# 赋予脚本可执行权限
-RUN chmod +x curl-batch.sh
+RUN chmod +x curl-batch.sh decrypt-configs.sh
 
-# 默认执行 bash，用户可自定义参数
-ENTRYPOINT ["/app/curl-batch.sh"]
+# 入口脚本：先解密，再执行主脚本
+ENTRYPOINT ["/bin/bash", "-c", "./decrypt-configs.sh && ./curl-batch.sh \"$@\""]
