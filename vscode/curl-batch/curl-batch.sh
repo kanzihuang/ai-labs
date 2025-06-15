@@ -1,7 +1,13 @@
 #!/bin/bash
 
+DRY_RUN=0
+
 curl() {
-    command curl -I "$url"
+    if [[ $DRY_RUN -eq 1 ]]; then
+        echo "command curl -I \"$url\""
+    else
+        command curl -I "$url"
+    fi
 }
 
 main() {
@@ -10,6 +16,10 @@ main() {
     # 解析参数
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --dry-run)
+                DRY_RUN=1
+                shift
+                ;;
             --site)
                 if [[ -n "$2" && "$2" != --* ]]; then
                     sites+=("$2")
