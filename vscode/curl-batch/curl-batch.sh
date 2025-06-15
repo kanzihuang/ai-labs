@@ -11,11 +11,21 @@ main() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --site)
-                if [[ -n "$2" ]]; then
+                if [[ -n "$2" && "$2" != --* ]]; then
                     sites+=("$2")
                     shift 2
                 else
                     echo "Error: --site requires a value." >&2
+                    exit 1
+                fi
+                ;;
+            --site=*)
+                site_value="${1#--site=}"
+                if [[ -n "$site_value" ]]; then
+                    sites+=("$site_value")
+                    shift
+                else
+                    echo "Error: --site= requires a value." >&2
                     exit 1
                 fi
                 ;;
