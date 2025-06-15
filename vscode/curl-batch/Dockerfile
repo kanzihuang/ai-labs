@@ -1,9 +1,12 @@
 # 使用官方轻量级 Debian 镜像
 FROM debian:stable-slim
 
-# 安装 bash 和 curl
+# 安装 bash、curl 和 ca-certificates
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends bash curl && \
+    apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \ 
+        curl && \
     rm -rf /var/lib/apt/lists/*
 
 # 设置工作目录
