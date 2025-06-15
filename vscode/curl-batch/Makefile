@@ -8,7 +8,7 @@ ENCRYPTED_FILES = $(patsubst $(CONF_DIR)/%.curl,$(ENCRYPTED_DIR)/%.curl.enc,$(CU
 
 .PHONY: all encrypt clean build
 
-all: encrypt
+all: build
 
 encrypt: $(ENCRYPTED_FILES)
 
