@@ -1,12 +1,34 @@
 #!/bin/bash
 
+readonly serviceName="$SERVICE"
+readonly imageTarget="$IMAGE"
+readonly taskID="$TASK_ID"
+readonly nexusPrefix="$NEXUS_PREFIX"
+readonly gitRepositories="$GIT_REPOSITORIES"
+readonly buildOS="$BUILD_OS"
+readonly buildArch="$BUILD_ARCH"
+
+readonly imagePull="docker pull '$imageTarget'"
+readonly imageVersion=${imageTarget##*:}
+readonly nexusName="${serviceName}_${imageVersion}.jar"
+readonly nexusUrl="$nexusPrefix/${nexusName}"
+
 DRY_RUN=0
 
-curl() {
-    if [[ $DRY_RUN -eq 1 ]]; then
-        echo "command curl -I \"$url\""
-    else
-        command curl -I "$url"
+curl_cmd() {
+    # local cmd='curl --retry 3 -X POST -H '"'"'Content-Type: application/json'"'"' -H '"'"'AccessKeyId: '$accessKeyId"'"' -H '"'"'AccessKeySecret: '$accessKeySecret"'"' -d '"'"$requestBody"'"' '"'"$requestUrl"'"
+    local cmd=$(cat <<EOF
+        curl --retry 3 \
+            -X POST \
+            -H "Content-Type: application/json" \
+            ${requestHeaders} \
+            -d '${requestBody}' \
+            '${requestUrl}'
+EOF
+    )
+    echo "$cmd"
+    if [[ $DRY_RUN -eq 0 ]]; then
+        eval $cmd
     fi
 }
 
@@ -48,22 +70,22 @@ main() {
 
     if [[ ${#sites[@]} -gt 0 ]]; then
         for site in "${sites[@]}"; do
-            file="$config_dir/$site.curl"
+            file="$config_dir/$site.sh"
             if [[ ! -f "$file" ]]; then
                 echo "Config file for site '$site' not found: $file" >&2
                 exit 1
             fi
             source "$file"
-            curl
+            curl_cmd
         done
     else
-        for file in $config_dir/*.curl; do
+        for file in $config_dir/*.sh; do
             if [[ ! -f "$file" ]]; then
                 echo "$file is not a config file."
                 exit 1
             fi
             source "$file"
-            curl
+            curl_cmd
         done
     fi
 }
