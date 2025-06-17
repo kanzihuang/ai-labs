@@ -16,7 +16,6 @@ readonly nexusUrl="$nexusPrefix/${nexusName}"
 DRY_RUN=0
 
 curl_cmd() {
-    # local cmd='curl --retry 3 -X POST -H '"'"'Content-Type: application/json'"'"' -H '"'"'AccessKeyId: '$accessKeyId"'"' -H '"'"'AccessKeySecret: '$accessKeySecret"'"' -d '"'"$requestBody"'"' '"'"$requestUrl"'"
     local cmd=$(cat <<EOF
         curl --retry 3 \
             -X POST \
