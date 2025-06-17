@@ -26,6 +26,7 @@ EOF
     echo "$cmd"
     if [[ $DRY_RUN -eq 0 ]]; then
         eval $cmd
+        echo "构建通知发送完成：${requestUrl}"
         return 0
     fi
 }
