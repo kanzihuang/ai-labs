@@ -3,15 +3,13 @@
 readonly serviceName="$SERVICE"
 readonly imageTarget="$IMAGE"
 readonly taskID="$TASK_ID"
-readonly nexusPrefix="$NEXUS_PREFIX"
 readonly gitRepositories="$GIT_REPOSITORIES"
 readonly buildOS="$BUILD_OS"
 readonly buildArch="$BUILD_ARCH"
-
 readonly imagePull="docker pull '$imageTarget'"
 readonly imageVersion=${imageTarget##*:}
 readonly nexusName="${serviceName}_${imageVersion}.jar"
-readonly nexusUrl="$nexusPrefix/${nexusName}"
+readonly nexusUrl="https://nexus.nancalcloud.com/repository/$NEXUS_REPOSITORY/$NEXUS_DIRECTORY/${nexusName}"
 
 DRY_RUN=0
 
@@ -28,6 +26,7 @@ EOF
     echo "$cmd"
     if [[ $DRY_RUN -eq 0 ]]; then
         eval $cmd
+        return 0
     fi
 }
 
