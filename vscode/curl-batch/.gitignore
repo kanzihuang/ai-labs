@@ -1,2 +1,4 @@
 
 conf/
+conf_encrypted/
+conf_decrypted/
