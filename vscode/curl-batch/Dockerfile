@@ -16,6 +16,18 @@ WORKDIR /app
 COPY conf_encrypted/ conf_encrypted/
 COPY curl-batch.sh decrypt-configs.sh entrypoint.sh ./
 
-RUN chmod +x curl-batch.sh decrypt-configs.sh entrypoint.sh
+ARG user=curl
+ARG group=curl
+ARG uid=1000
+ARG gid=1000
+ARG CONF_DECRYPTED=/app/conf_decrypted
+
+RUN groupadd -g ${gid} ${group} \
+  && useradd -u ${uid} -g ${gid} -l -m -s /bin/bash ${user} \
+  && chmod +x curl-batch.sh decrypt-configs.sh entrypoint.sh \
+  && mkdir -p $CONF_DECRYPTED \
+  && chown ${gid}:${uid} $CONF_DECRYPTED
+
+USER ${user}
 
 ENTRYPOINT ["/app/entrypoint.sh"]
