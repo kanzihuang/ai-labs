@@ -1,19 +1,42 @@
 #!/bin/bash
 
-readonly serviceName="$SERVICE"
-readonly imageTarget="$IMAGE"
+# serviceName: 服务名
+readonly serviceName="$SERVICE_NAME"
+# targetImage: 镜像名，如：devops-server:20240327184229-6861-test-LY-SP1-1
+readonly targetImage="$TARGET_IMAGE"
+# taskID: 构建任务id
 readonly taskID="$TASK_ID"
+# gitRepositories: json对象，代码创建信息
 readonly gitRepositories="$GIT_REPOSITORIES"
+# buildOS: 系统名称，linux
 readonly buildOS="$BUILD_OS"
+# buildArch: 系统架构，x86
 readonly buildArch="$BUILD_ARCH"
-readonly imagePull="docker pull '$imageTarget'"
-readonly imageVersion=${imageTarget##*:}
+# imagePull: 镜像拉取命令
+readonly imagePull="docker pull '$targetImage'"
+# imageVersion: 版本名称，取自镜像 ： 后的字符串，如：(devops-server:)20240327184229-6861-test-LY-SP1-1
+readonly imageVersion=${targetImage##*:}
+# nexusName: 二进制文件名，java的.jar,vue的.tgz，名称，不是路径
 readonly nexusName="${serviceName}_${imageVersion}.jar"
+# nexusUrl: 二进制文件下载地址
 readonly nexusUrl="https://nexus.nancalcloud.com/repository/$NEXUS_REPOSITORY/$NEXUS_DIRECTORY/${nexusName}"
 
 DRY_RUN=0
 
 curl_cmd() {
+    local conf_file="$1"
+    if [[ ! -f "$conf_file" ]]; then
+        echo "Config file '$conf_file' not found: $conf_file" >&2
+        exit 1
+    fi
+
+    local requestUrl requestHeaders requestBody
+    source "$conf_file"
+    if [ $? -ne 0 ]; then
+        echo "source '$conf_file' failed" >&2
+        exit 1
+    fi
+
     local cmd=$(cat <<EOF
         curl --retry 3 \
             -X POST \
@@ -26,15 +49,18 @@ EOF
     echo "$cmd"
     if [[ $DRY_RUN -eq 0 ]]; then
         eval $cmd
-        echo -e "\n构建通知发送完成：${requestUrl}"
+        echo
+        if [ $? -ne 0 ]; then
+            echo -e "构建通知发送失败" >&2
+        fi
         return 0
     fi
 }
 
 main() {
     # 配置目录改为解密后的 conf_decrypted
-    config_dir="$(cd "$(dirname "$0")/conf_decrypted" && pwd)"
-    sites=()
+    local config_dir="$(cd "$(dirname "$0")/conf_decrypted" && pwd)"
+    local sites=()
     # 解析参数
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -67,24 +93,14 @@ main() {
         esac
     done
 
+    local site file
     if [[ ${#sites[@]} -gt 0 ]]; then
         for site in "${sites[@]}"; do
-            file="$config_dir/$site.sh"
-            if [[ ! -f "$file" ]]; then
-                echo "Config file for site '$site' not found: $file" >&2
-                exit 1
-            fi
-            source "$file"
-            curl_cmd
+            curl_cmd "$config_dir/$site.sh"
         done
     else
         for file in $config_dir/*.sh; do
-            if [[ ! -f "$file" ]]; then
-                echo "$file is not a config file."
-                exit 1
-            fi
-            source "$file"
-            curl_cmd
+            curl_cmd $file
         done
     fi
 }
