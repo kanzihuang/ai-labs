@@ -76,7 +76,7 @@ echo "----------------开始推送制品通知-----------------"
 docker run --rm --pull always \
     -e BUILD_OS="$(uname -s)" \
     -e BUILD_ARCH="$(uname -m)" \
-    -e DECRYPT_KEY=“$DECRYPT_KEY” \
+    -e DECRYPT_KEY="$DECRYPT_KEY" \
     -e GIT_REPOSITORIES="$(get_git_repositories)" \
     -e NEXUS_DIRECTORY="$NEXUS_DIRECTORY" \
     -e NEXUS_NAME="$NEXUS_NAME" \

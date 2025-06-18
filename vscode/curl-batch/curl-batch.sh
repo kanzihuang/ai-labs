@@ -19,7 +19,7 @@ readonly taskID="$TASK_ID"
 # nexusName: 二进制文件名，java的.jar,vue的.tgz，名称，不是路径
 readonly nexusName="$NEXUS_NAME"
 # nexusUrl: 二进制文件下载地址
-readonly nexusUrl="https://nexus.nancalcloud.com/repository/$NEXUS_REPOSITORY/$NEXUS_DIRECTORY/${nexusName}"
+readonly nexusUrl="https://nexus.nancalcloud.com/repository/$NEXUS_REPOSITORY/$NEXUS_DIRECTORY/$SERVICE_NAME/${nexusName}"
 
 DRY_RUN=0
 
