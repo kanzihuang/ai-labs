@@ -1,23 +1,23 @@
 #!/bin/bash
 
+# buildOS: 系统名称，linux
+readonly buildOS="$BUILD_OS"
+# buildArch: 系统架构，x86
+readonly buildArch="$BUILD_ARCH"
+# gitRepositories: json对象，代码创建信息
+readonly gitRepositories="$GIT_REPOSITORIES"
+# imagePull: 镜像拉取命令
+readonly imagePull="docker pull '$TARGET_IMAGE'"
+# imageVersion: 版本名称，取自镜像 ： 后的字符串，如：(devops-server:)20240327184229-6861-test-LY-SP1-1
+readonly imageVersion=${TARGET_IMAGE##*:}
 # serviceName: 服务名
 readonly serviceName="$SERVICE_NAME"
 # targetImage: 镜像名，如：devops-server:20240327184229-6861-test-LY-SP1-1
 readonly targetImage="$TARGET_IMAGE"
 # taskID: 构建任务id
 readonly taskID="$TASK_ID"
-# gitRepositories: json对象，代码创建信息
-readonly gitRepositories="$GIT_REPOSITORIES"
-# buildOS: 系统名称，linux
-readonly buildOS="$BUILD_OS"
-# buildArch: 系统架构，x86
-readonly buildArch="$BUILD_ARCH"
-# imagePull: 镜像拉取命令
-readonly imagePull="docker pull '$targetImage'"
-# imageVersion: 版本名称，取自镜像 ： 后的字符串，如：(devops-server:)20240327184229-6861-test-LY-SP1-1
-readonly imageVersion=${targetImage##*:}
 # nexusName: 二进制文件名，java的.jar,vue的.tgz，名称，不是路径
-readonly nexusName="${serviceName}_${imageVersion}.jar"
+readonly nexusName="$NEXUS_NAME"
 # nexusUrl: 二进制文件下载地址
 readonly nexusUrl="https://nexus.nancalcloud.com/repository/$NEXUS_REPOSITORY/$NEXUS_DIRECTORY/${nexusName}"
 
@@ -38,7 +38,7 @@ curl_cmd() {
     fi
 
     local cmd=$(cat <<EOF
-        curl --retry 3 \
+        curl --retry 3 -sS \
             -X POST \
             -H "Content-Type: application/json" \
             ${requestHeaders} \
