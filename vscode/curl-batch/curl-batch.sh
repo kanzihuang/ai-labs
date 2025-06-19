@@ -37,22 +37,16 @@ curl_cmd() {
         exit 1
     fi
 
-    local cmd=$(cat <<EOF
-        curl --retry 3 -sS \
-            -X POST \
-            -H "Content-Type: application/json" \
-            ${requestHeaders} \
-            -d '${requestBody}' \
-            '${requestUrl}'
-EOF
-    )
-    echo "$cmd"
+    echo "notifying '${requestUrl}' with body '${requestBody}'" >&2
     if [[ $DRY_RUN -eq 0 ]]; then
-        eval $cmd
-        echo
+        curl -H "Content-Type: application/json" --retry 3 -sS -X POST \
+            "${requestHeaders[@]}" \
+            -d "${requestBody}" \
+            "${requestUrl}"
         if [ $? -ne 0 ]; then
             echo -e "构建通知发送失败" >&2
         fi
+        echo
         return 0
     fi
 }
