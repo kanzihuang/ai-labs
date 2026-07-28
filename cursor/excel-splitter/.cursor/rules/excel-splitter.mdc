@@ -7,11 +7,12 @@ alwaysApply: false
 
 ## Project Structure
 
-The Excel Splitter is a Python tool that splits Excel spreadsheets according to specific rules.
+The Excel Splitter is a Python tool that splits Excel spreadsheets according to specific rules, then merges results by payment account.
 
 - [main.py](mdc:main.py) - Main entry point containing core functionality
 - [test_excel_splitter.py](mdc:test_excel_splitter.py) - Unit tests for the application
 - [config.yaml](mdc:config.yaml) - Configuration file with settings for input/output paths and column mappings
+- [specification.md](mdc:specification.md) - Requirements specification
 - [requirements.txt](mdc:requirements.txt) - Project dependencies
 
 ## Key Components
@@ -20,17 +21,25 @@ The Excel Splitter is a Python tool that splits Excel spreadsheets according to 
 
 The core functionality is in [main.py](mdc:main.py), with these key functions:
 
-- `process_excel()` - Main function that handles the Excel file processing
-- `split_row()` - Function that performs the actual row splitting based on the reference data
-- `validate_sheets()` - Validates that all required sheets and columns exist
+- `process_excel()` - Main function that handles the Excel file processing end-to-end
+- `split_row()` - Performs row splitting based on reference (timesheet) data
+- `merge_rows_by_account()` - Post-processes split results, merging rows by payment account
+- `validate_sheets()` - Validates all sheets, columns, and data integrity, collects all errors
 
 ### Configuration
 
 All settings are stored in [config.yaml](mdc:config.yaml), which defines:
 - Input and output file paths
-- Sheet names for source, reference, and result data
-- Column mappings between source and reference sheets
+- Sheet names for source, reference, payment, and result data
+- Column mappings between source, reference, and payment sheets
 - Columns that should be split
+
+### Processing Flow
+
+1. Load and validate all sheets and data
+2. For each source row, split by reference (timesheet) data
+3. Merge split rows by payment account
+4. Write merged results to output
 
 ### Project Requirements
 
@@ -41,6 +50,6 @@ The application depends on several Python libraries defined in [requirements.txt
 ## Development Guidelines
 
 1. When adding new features, start by adding tests in [test_excel_splitter.py](mdc:test_excel_splitter.py)
-2. Follow the documentation in [README.md](mdc:README.md) for understanding the splitting rules
+2. Follow the documentation in [specification.md](mdc:specification.md) for understanding requirements
 3. All code should follow PEP 8 style guide with proper docstrings
-4. Configuration changes should be documented in both the config file and README
+4. Configuration changes should be documented in both the config file and specification

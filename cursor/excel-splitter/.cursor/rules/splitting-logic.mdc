@@ -5,13 +5,17 @@ alwaysApply: false
 ---
 # Excel Splitting Logic Guide
 
-## Splitting Rules
+## Overview
 
-The Excel Splitter follows specific rules defined in [specification.md](mdc:specification.md) to split salary data across multiple rows based on reference data.
+The Excel Splitter processes salary data in three stages: split → merge → output.
+
+1. **Split**: Match source rows to reference (timesheet) rows by employee_id, proportionally divide salary columns
+2. **Merge**: Group split rows by (employee_id, payment_account), combining rows that share the same payment account
+3. **Output**: Write merged rows to result sheet
 
 ## Split Row Function
 
-The core of the splitting logic is in the `split_row()` function in [main.py](mdc:main.py). Here's how it works:
+The core splitting logic is in the `split_row()` function in [main.py](mdc:main.py). Here's how it works:
 
 1. Match source row with reference rows using employee ID
 2. If no match is found, copy the source row as-is to the result
@@ -23,27 +27,46 @@ The core of the splitting logic is in the `split_row()` function in [main.py](md
      - Update specific columns (project_id, project_category, project_hours) from reference data
      - Split columns defined in `splitting_columns` by multiplying by the calculated ratio
 
+## Merge Rows Function
+
+The `merge_rows_by_account()` function in [main.py](mdc:main.py) post-processes split results:
+
+1. Look up each row's `project_id` in the payment mapping to get `project_account`
+2. Group rows by `(employee_id, project_account)`, preserving first-occurrence order
+3. For each group, produce one merged row:
+   - `project_id`: comma-separated distinct values
+   - `project_category`: comma-separated distinct values
+   - `project_hours`: summed
+   - `project_account`: from payment mapping
+   - `splitting_columns`: summed
+   - Other columns: from first row
+
 ## Column Mapping
 
-Column mapping is critical to understand:
-
 - The `employee_id` column is used to match rows between source and reference sheets
-- The splitting columns (typically salary fields) are defined in `config.yaml` under `input.splitting_columns`
-- Three columns are always updated from reference data: project_id, project_category, and project_hours
+- The splitting columns are defined in `config.yaml` under `input.splitting_columns`
+- Three columns are updated from reference data: project_id, project_category, project_hours
+- `project_account` is filled from the payment table mapping
 - All other columns are copied unchanged from the source
 
 ## Validation Logic
 
 Before processing, [main.py](mdc:main.py) validates:
 
-1. Required sheets exist in the workbook
-2. Required columns exist in both source and reference sheets
-3. Splitting columns exist in the source sheet
+1. Required sheets and columns exist
+2. Reference table: no duplicate (employee_id, project_id) pairs
+3. Payment table: no duplicate project_id, no empty project_account
+4. Reference project_ids all exist in payment mapping
+5. Source non-split rows' project_ids exist in payment mapping
+
+All validation errors are collected and reported together.
 
 ## Testing Approach
 
 The [test_excel_splitter.py](mdc:test_excel_splitter.py) file contains tests that verify:
 
-1. Headers match between source and result sheets
+1. Headers match between source and result sheets (including project_account)
 2. Rows copy correctly when no reference match exists
-3. Rows split correctly when reference matches exist with proper column values
+3. Rows split correctly when reference matches exist
+4. Rows merge correctly by payment account
+5. Validation fails correctly for various error conditions
