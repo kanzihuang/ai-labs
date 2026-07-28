@@ -2,19 +2,25 @@ input:
   path: "input/项目成本.xlsx"  
   sheet:
     source:
-      name: "工资"
+      name: "输入-工资表"
       columns:
         employee_id: "工号"
         project_id: "费用所属中心"
         project_category: "费用类别"
         project_hours: "实际出勤"
+        project_account: "支付账号"
     reference:
-      name: "研发人员工时表"
+      name: "输入-工时表"
       columns:
         employee_id: "工号"
         project_id: "费用所属中心"
         project_category: "费用类别"
         project_hours: "实际出勤"
+    payment:
+      name: "输入-支付规则"
+      columns:
+        project_id: "费用所属中心"
+        project_account: "支付账号"
   splitting_columns:
   - 基本工资
   - 岗位工资
