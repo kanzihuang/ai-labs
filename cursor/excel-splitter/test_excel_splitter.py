@@ -428,5 +428,135 @@ class TestExcelSplitter(unittest.TestCase):
         self.assertEqual(result_row[9], 'Account_X')
 
 
+    # --- Merge key correctness ---
+
+    def test_different_employees_same_account_not_merged(self):
+        """Different employees sharing same payment account should NOT be merged"""
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导']
+        self.source_sheet.append(source_headers)
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, '研发', '研发部', 21, 'BB'])
+        self.source_sheet.append(['李四', 'CC', '中国', 2000.00, 4000.00, '研发', '研发部', 21, 'DD'])
+
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
+        self.reference_sheet.append(['李四', 'CC', '研发', '1', 10])
+
+        # Both employees' projects map to the SAME account
+        payment_headers = ['费用所属中心', '支付账号']
+        self.payment_sheet.append(payment_headers)
+        self.payment_sheet.append(['1', 'Account_X'])
+        self.payment_sheet.append(['研发部', 'Account_RD'])
+
+        self.wb.save('test_input.xlsx')
+        process_excel(self.config)
+
+        output_wb = load_workbook('test_output.xlsx')
+        result_sheet = output_wb['工资拆分']
+
+        # Should have 2 rows — one per employee, NOT merged together
+        result_rows = list(result_sheet.iter_rows(min_row=2))
+        self.assertEqual(len(result_rows), 2,
+                         "Different employees should not merge even with same account")
+
+        row1 = [cell.value for cell in result_rows[0]]
+        row2 = [cell.value for cell in result_rows[1]]
+
+        # Employee AA: salary 1000/3000 fully to project 1, account Account_X
+        self.assertEqual(row1[1], 'AA')
+        self.assertEqual(row1[9], 'Account_X')
+
+        # Employee CC: salary 2000/4000 fully to project 1, account Account_X
+        self.assertEqual(row2[1], 'CC')
+        self.assertEqual(row2[9], 'Account_X')
+
+    # --- Merge scope ---
+
+    def test_same_employee_multiple_source_rows_not_merged(self):
+        """Same employee with multiple source rows should NOT merge across source rows"""
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导']
+        self.source_sheet.append(source_headers)
+        # Same employee (AA), two source rows with different salary data
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, '研发', '研发部', 21, 'BB'])
+        self.source_sheet.append(['张三', 'AA', '中国', 500.00,  1500.00, '研发', '研发部', 21, 'BB'])
+
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 10])
+
+        payment_headers = ['费用所属中心', '支付账号']
+        self.payment_sheet.append(payment_headers)
+        self.payment_sheet.append(['1', 'Account_X'])
+        self.payment_sheet.append(['研发部', 'Account_RD'])
+
+        self.wb.save('test_input.xlsx')
+        process_excel(self.config)
+
+        output_wb = load_workbook('test_output.xlsx')
+        result_sheet = output_wb['工资拆分']
+
+        # Should have 2 rows — each source row independently split & merged
+        result_rows = list(result_sheet.iter_rows(min_row=2))
+        self.assertEqual(len(result_rows), 2,
+                         "Same employee's multiple source rows should not merge across source rows")
+
+        row1 = [cell.value for cell in result_rows[0]]
+        row2 = [cell.value for cell in result_rows[1]]
+
+        # First source row: 基本工资=1000, 岗位工资=3000
+        self.assertAlmostEqual(row1[3], 1000.00, places=1)
+        self.assertAlmostEqual(row1[4], 3000.00, places=1)
+
+        # Second source row: 基本工资=500, 岗位工资=1500
+        self.assertAlmostEqual(row2[3], 500.00, places=1)
+        self.assertAlmostEqual(row2[4], 1500.00, places=1)
+
+    # --- Mixed split / non-split ---
+
+    def test_mixed_split_and_no_split_rows(self):
+        """One source row splits, another doesn't — both handled correctly"""
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导']
+        self.source_sheet.append(source_headers)
+        # Row 1: has reference match → will be split, source project_id ignored
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, '研发', 'no_such_project', 21, 'BB'])
+        # Row 2: no reference match → copied as-is, source project_id MUST be in payment
+        self.source_sheet.append(['李四', 'CC', '中国', 2000.00, 5000.00, '研发', '研发部', 21, 'DD'])
+
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
+        self.reference_sheet.append(['张三', 'AA', '研发', '2', 5])
+
+        # Payment has reference project_ids AND source row 2's project_id, but NOT row 1's
+        payment_headers = ['费用所属中心', '支付账号']
+        self.payment_sheet.append(payment_headers)
+        self.payment_sheet.append(['1', 'Account_X'])
+        self.payment_sheet.append(['2', 'Account_Y'])
+        self.payment_sheet.append(['研发部', 'Account_RD'])
+        # Note: no "no_such_project" in payment, but that's OK because row 1 splits
+
+        self.wb.save('test_input.xlsx')
+        process_excel(self.config)
+
+        output_wb = load_workbook('test_output.xlsx')
+        result_sheet = output_wb['工资拆分']
+
+        result_rows = list(result_sheet.iter_rows(min_row=2))
+        self.assertEqual(len(result_rows), 3,
+                         "Row 1 splits into 2 (distinct accounts) + Row 2 copied as 1 = 3 rows")
+
+        # Row 1 split results: project "1" -> Account_X, project "2" -> Account_Y
+        row1_data = [cell.value for cell in result_rows[0]]
+        row2_data = [cell.value for cell in result_rows[1]]
+        self.assertIn(row1_data[6], ['1', '2'])
+        self.assertIn(row1_data[9], ['Account_X', 'Account_Y'])
+
+        # Row 2 (no split): should retain project_id "研发部" and get Account_RD
+        row3_data = [cell.value for cell in result_rows[2]]
+        self.assertEqual(row3_data[1], 'CC')
+        self.assertEqual(row3_data[6], '研发部')
+        self.assertEqual(row3_data[9], 'Account_RD')
+
+
 if __name__ == '__main__':
     unittest.main()
