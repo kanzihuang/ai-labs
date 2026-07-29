@@ -131,6 +131,35 @@ output:
    python main.py [--config config.yaml]
    ```
 
+## 打包
+
+将程序打包为独立可执行文件（无需安装 Python 即可运行）。
+
+```bash
+# 安装 virtualenv 并创建虚拟环境
+pip install virtualenv
+virtualenv venv
+
+# 激活虚拟环境（Windows）
+venv\Scripts\activate.bat
+# 或激活虚拟环境（Linux/macOS）
+source venv/bin/activate
+
+# 安装依赖
+pip install -r requirements.txt
+
+# 安装 PyInstaller
+pip install pyinstaller
+
+# 打包为单个 exe 文件
+pyinstaller --onefile main.py
+
+# 退出虚拟环境
+deactivate
+```
+
+打包后的文件位于 `dist/main.exe`（Windows）或 `dist/main`（Linux/macOS）。将 `config.yaml` 和输入 Excel 文件放在同一目录下即可运行。
+
 ## 测试用例
 
 ### 1. 表头一致性测试
