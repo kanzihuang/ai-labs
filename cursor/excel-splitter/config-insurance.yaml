@@ -1,5 +1,5 @@
 input:
-  path: "input/data.xlsx"
+  path: "input/计提及支付账户拆分配置材料.xlsx"
   sheet:
     source:
       name: "输入-社保表"
@@ -9,6 +9,7 @@ input:
         project_category: "费用类别"
         project_hours: "实际出勤"
         project_account: "支付账户"
+        employer_name: "费用归属单位"
     reference:
       name: "输入-工时表"
       columns:
@@ -21,6 +22,7 @@ input:
       columns:
         project_id: "费用所属中心"
         project_account: "支付账户"
+        employer_name: "公司"
   splitting_columns:
   - "养老保险企业缴纳金额"
   - "养老保险个人缴纳金额"
