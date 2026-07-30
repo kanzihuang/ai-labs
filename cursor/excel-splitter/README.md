@@ -15,6 +15,10 @@
 
 配置文件采用YAML格式，默认文件名为`config.yaml`。配置项说明如下：
 
+- `input.sheet.*.columns` 下的键值对表示处理过程中涉及到的列，键为列的标识，值为列的名称，查找列时通过列名称在表头中定位
+- `input.splitting_columns` 下的列表表示需要按比例拆分的列
+- 支付规则表(payment)定义了项目ID到支付账号的映射关系
+
 ```yaml
 # 注意：project_account 在 source.columns 中是可选的
 # - 如果配置了 payment 表，project_account 可定义在 source.columns 中，程序会自动填充
@@ -182,6 +186,16 @@ output:
    python main.py [--config config.yaml]
    ```
 
+## 编程规范
+
+- 编写语言为 Python，遵循 Python 编程规范
+- 默认从配置文件读取配置，配置文件路径通过 `--config` 命令行参数指定
+- 首先调用 `validate_config()` 验证配置文件结构，有误则直接退出并输出详细原因
+- 然后检查输入文件，无法拆分则直接退出并输出原因
+- 所有数据验证错误一次性收集并输出
+- 处理完成后调用 `verify_output()` 验证输出文件完整性
+- 文件编码统一采用 UTF-8
+
 ## 打包
 
 将程序打包为独立可执行文件（无需安装 Python 即可运行）。
@@ -315,7 +329,6 @@ excel-splitter/
 ├── main.py             # 主程序
 ├── test_excel_splitter.py  # 单元测试
 ├── config.yaml         # 配置文件
-├── specification.md    # 需求规格说明
 ├── requirements.txt    # 项目依赖
 └── README.md           # 项目文档
 ```
