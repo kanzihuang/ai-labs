@@ -22,7 +22,7 @@ input:
         project_category: "费用类别"
         project_hours: "实际出勤"
     payment:
-      name: "支付规则"
+      name: "支付规则"  # 可选，不配置则不合并
       columns:
         project_id: "费用所属中心"
         project_account: "支付账号"
@@ -36,12 +36,31 @@ output:
       name: "工资拆分"
 ```
 
+> 支付规则表(payment)是可选的。如果不配置 payment 表，则不进行支付账号合并，结果表中也不添加支付账号列。
+
+## 配置验证
+
+在处理开始之前，调用 `validate_config()` 验证配置文件结构。校验内容包括：
+
+- `input.path` 是否存在且为有效字符串
+- `input.sheet.source` 及 `source.columns.employee_id` 是否存在
+- `input.sheet.reference` 及 `reference.columns` 下四个必填字段是否存在
+- `input.splitting_columns` 是否为非空列表，检测其中的重复条目
+- payment（可选）：如果配置了 payment，需要有效的 `name`、`columns.project_id` 和 `columns.project_account`
+- 冲突检测：如果 `source.columns` 中包含 `project_account` 但未正确配置 payment 表，则报错
+- `output.path`、`output.sheet.result.name` 是否存在且有效
+
+所有配置错误一次性收集并输出。
+
 ## 编程规范
 
 - 编写语言为python，要求按python编程规范编写程序
 - 默认从配置文件中读取配置，配置文件路径可通过命令行参数设定
+- 首先调用 `validate_config()` 验证配置文件结构，如果配置有误直接退出并输出详细原因
 - 检查输入文件，如果无法拆分直接退出，并输出无法拆分的原因
-- 文件编码方式采用统一采用UTF8
+- 所有数据验证错误一次性收集并输出，便于一次性修正
+- 处理完成后调用 `verify_output()` 验证输出文件的完整性
+- 文件编码方式统一采用UTF8
 
 ## 数据描述
 
@@ -56,15 +75,20 @@ output:
 - 表source中列employee_id必须存在
 - 表source中需要拆分的列必须存在
 - 表reference中列employee_id、project_id、project_category、project_hours必须存在
-- 表payment中列project_id、project_account必须存在
+- 表payment中列project_id、project_account必须存在（可选，仅在配置文件中配置了payment时检查）
 
 ### 预检查（一次性收集所有问题）
 
-1. 表reference按(employee_id, project_id)联合检索无重复数据，如有重复则报错
-2. 表payment按project_id无重复数据，如有重复则报错
+1. 表reference按(employee_id, project_id)联合检索无重复数据，如有重复则报错（每个重复对仅报告一次）
+2. 表payment按project_id无重复数据，如有重复则报错（每个重复ID仅报告一次）
 3. 表payment中project_id非空时project_account字段不为空，如为空则报错
-4. 表reference中project_id必须在表payment中有对应记录，如无则报错
-5. 表source中未参与拆分的行（在reference中无匹配employee_id），其project_id必须在表payment中有对应记录，如无则报错
+4. 表reference中project_id必须在表payment中有对应记录，如无则报错（仅当配置了payment时检查）
+5. 表source中未参与拆分的行（在reference中无匹配employee_id），其project_id必须在表payment中有对应记录，如无则报错（仅当配置了payment时检查）
+6. 表reference中employee_id不能为空，防止拆分时匹配失败
+7. 表source中employee_id不能为空
+8. 表reference中project_hours必须为数字值，非数字值无法计算拆分比例
+9. 表reference中project_hours不能为负数
+10. 表source和表reference的employee_id数据类型必须一致，防止字符串与数字混用导致匹配失败
 
 所有验证错误一次性收集并输出，便于一次性修正。
 
@@ -80,8 +104,11 @@ output:
     - 表result中拆分后的行的数字格式同表source中拆分前的行
   - 如果通过employee_id在表reference中未找到对应的记录
     - 表source中该行整体复制到表result，包括该行的数字格式
+- 拆分过程中如果遇到非数字 project_hours，报错退出并包含具体的 employee_id 和 project_id 上下文
 
 ## 合并规则
+
+合并仅在配置文件中存在 payment 配置时执行。如未配置 payment，拆分结果直接输出，不合并，也不添加支付账号列。合并过程中 splitting_columns 索引会自动去重，防止重复计算。
 
 拆分完成后，按支付账号对结果行进行合并：
 
@@ -94,6 +121,18 @@ output:
    - project_account：从支付规则表获取
    - splitting_columns：求和
    - 其他列：保持不变
+
+## 输出验证
+
+处理完成并保存输出文件后，调用 `verify_output()` 进行完整性校验：
+
+1. 输出文件是否存在并可打开
+2. 结果表（result sheet）和源表（source sheet）是否存在于输出文件中
+3. 结果表中是否有空行
+4. 拆分列的值是否为数字且非负数
+5. 总额一致性：结果表中每个拆分列的合计与源表中对应列的合计之差不超过 0.001
+
+验证失败则报错退出。
 
 ## 测试用例
 
