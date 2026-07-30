@@ -134,7 +134,7 @@ def merge_rows_by_account(split_rows, source_headers, payment_mapping, config):
                                             config['input']['sheet']['source']['columns']['project_category'])
     project_hours_col = get_column_index(source_headers, config['input']['sheet']['source']['columns']['project_hours'])
     project_account_col = get_column_index(source_headers,
-                                            config['input']['sheet']['source']['columns']['project_account'])
+                                            config['input']['sheet']['source']['columns']['payment_account'])
     employer_name_col = get_column_index(source_headers,
                                           config['input']['sheet']['source']['columns']['employer_name'])
 
@@ -302,7 +302,7 @@ def validate_sheets(config, wb, payment_configured=True):
     if payment_configured:
         required_payment_columns = {
             'project_id': config['input']['sheet']['payment']['columns']['project_id'],
-            'project_account': config['input']['sheet']['payment']['columns']['project_account']
+            'payment_account': config['input']['sheet']['payment']['columns']['payment_account']
         }
         for col_id, col_name in required_payment_columns.items():
             if col_name not in payment_headers:
@@ -328,7 +328,7 @@ def validate_sheets(config, wb, payment_configured=True):
         payment_project_id_col = get_column_index(payment_headers,
                                                   config['input']['sheet']['payment']['columns']['project_id'])
         payment_project_account_col = get_column_index(payment_headers,
-                                                        config['input']['sheet']['payment']['columns']['project_account'])
+                                                        config['input']['sheet']['payment']['columns']['payment_account'])
         payment_employer_name_col = get_column_index(payment_headers,
                                                       config['input']['sheet']['payment']['columns']['employer_name'])
 
@@ -646,7 +646,7 @@ def validate_config(config):
                 if 'name' in pay and isinstance(pay['name'], str) and pay['name'].strip() != '' \
                    and 'columns' in pay \
                    and 'project_id' in pay['columns'] \
-                   and 'project_account' in pay['columns'] \
+                   and 'payment_account' in pay['columns'] \
                    and 'employer_name' in pay['columns']:
                     payment_configured = True
                 else:
@@ -654,8 +654,8 @@ def validate_config(config):
 
             # Conflict check: project_account or employer_name in source columns but no payment
             source_cols = sheets.get('source', {}).get('columns', {})
-            if 'project_account' in source_cols and not payment_configured:
-                errors.append("'project_account' is specified in source columns "
+            if 'payment_account' in source_cols and not payment_configured:
+                errors.append("'payment_account' is specified in source columns "
                               "but payment sheet is not properly configured")
             if 'employer_name' in source_cols and not payment_configured:
                 errors.append("'employer_name' is specified in source columns "
@@ -740,7 +740,7 @@ def process_excel(config):
 
         # Ensure project_account column exists in source_headers (only if payment is configured)
         if payment_configured:
-            project_account_name = config['input']['sheet']['source']['columns'].get('project_account')
+            project_account_name = config['input']['sheet']['source']['columns'].get('payment_account')
             if project_account_name and get_column_index(source_headers, project_account_name) is None:
                 new_col = len(source_headers) + 1
                 header_cell = result.cell(row=1, column=new_col)

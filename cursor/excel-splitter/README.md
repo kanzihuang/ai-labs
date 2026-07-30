@@ -20,9 +20,9 @@
 - 支付规则表(payment)定义了项目ID到支付账号的映射关系
 
 ```yaml
-# 注意：project_account 在 source.columns 中是可选的
-# - 如果配置了 payment 表，project_account 可定义在 source.columns 中，程序会自动填充
-# - 如果未配置 payment 表，payment 整个段可以删除，也不要定义 project_account
+# 注意：payment_account 在 source.columns 中是可选的
+# - 如果配置了 payment 表，payment_account 可定义在 source.columns 中，程序会自动填充
+# - 如果未配置 payment 表，payment 整个段可以删除，也不要定义 payment_account
 input:
   path: "input/项目成本.xlsx"  # 输入文件路径
   sheet:
@@ -33,7 +33,7 @@ input:
         project_id: "费用所属中心"
         project_category: "费用类别"
         project_hours: "实际出勤"
-        project_account: "支付账号"  # 可选，仅在配置 payment 表时需要
+        payment_account: "支付账号"  # 可选，仅在配置 payment 表时需要
     reference:
       name: "输入-工时表"  # 参考数据表名
       columns:  # 参考数据列映射
@@ -45,7 +45,7 @@ input:
       name: "输入-支付规则"  # 支付规则表（可选，不配置则不合并）
       columns:  # 支付规则列映射
         project_id: "费用所属中心"
-        project_account: "支付账号"
+        payment_account: "支付账号"
   splitting_columns:  # 需要拆分的列，重复条目会被检测并报错
   - 基本工资
   - 岗位工资
@@ -71,8 +71,8 @@ output:
    - `output.sheet.result.name` — 结果表名称，不能为空
 
 2. **payment 表可选性**：
-   - payment 配置项是可选的；如果提供，必须包含有效的 `name`、`columns.project_id` 和 `columns.project_account`
-   - 如果 `source.columns` 中包含 `project_account` 但未正确配置 payment 表，则报错退出
+   - payment 配置项是可选的；如果提供，必须包含有效的 `name`、`columns.project_id` 和 `columns.payment_account`
+   - 如果 `source.columns` 中包含 `payment_account` 但未正确配置 payment 表，则报错退出
 
 3. **splitting_columns 去重**：
    - 检测 `splitting_columns` 中的重复条目并报错
@@ -117,7 +117,7 @@ output:
 
 3. 支付规则表(payment)验证（可选）：
    - 仅在配置文件中存在`payment`配置时进行验证
-   - 如果配置了 payment 表，则必须包含`project_id`和`project_account`列
+   - 如果配置了 payment 表，则必须包含`project_id`和`payment_account`列
    - 如果未配置 payment 表，则不进行支付相关校验，拆分后不合并，结果表中不添加支付账号列
 
 ### 预检查（所有问题一次性报告）
@@ -126,7 +126,7 @@ output:
 |--------|------|------|
 | 工时表唯一性 | 按`(employee_id, project_id)`联合检索无重复 | 同一员工同一项目的工时记录不能重复（每个重复对仅报告一次） |
 | 支付规则唯一性 | 按`project_id`无重复 | 每个项目只能有一个支付账号（每个重复 ID 仅报告一次） |
-| 支付账号完整性 | `project_id`非空时`project_account`不能为空 | 每个有值的项目ID都必须有对应支付账号 |
+| 支付账号完整性 | `project_id`非空时`payment_account`不能为空 | 每个有值的项目ID都必须有对应支付账号 |
 | 工时表项目覆盖 | `project_id`必须在支付规则表中存在（仅当配置了 payment 时检查） | 拆分后的项目ID来自工时表，必须能查到支付账号 |
 | 源表非拆分覆盖 | 无参考匹配的源行`project_id`必须在支付规则表中存在（仅当配置了 payment 时检查） | 未拆分的行保留原项目ID，必须能查到支付账号 |
 | 空 employee_id (参考表) | 参考表中 employee_id 不能为空 | 防止拆分时匹配失败 |
@@ -156,7 +156,7 @@ output:
 
 拆分完成后，按支付账号对结果行进行合并：
 
-1. **合并键**：`employee_id + project_account`
+1. **合并键**：`employee_id + payment_account`
    - 同一员工、同一支付账号的拆分行合并为一行
    - 不同员工即使支付账号相同也互不合并
 
@@ -170,7 +170,7 @@ output:
 | `project_id` | 逗号分隔的去重值，按出现顺序 |
 | `project_category` | 逗号分隔的去重值，按出现顺序 |
 | `project_hours` | 求和 |
-| `project_account` | 从支付规则表获取 |
+| `payment_account` | 从支付规则表获取 |
 | 拆分列（splitting_columns） | 求和 |
 | 其他列 | 保持不变（同一员工值相同） |
 

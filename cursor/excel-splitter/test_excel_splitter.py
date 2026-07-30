@@ -20,7 +20,7 @@ class TestExcelSplitter(unittest.TestCase):
                             'project_id': '费用所属中心',
                             'project_category': '费用类别',
                             'project_hours': '实际出勤',
-                            'project_account': '支付账号',
+                            'payment_account': '支付账号',
                             'employer_name': '工资所属单位'
                         }
                     },
@@ -37,7 +37,7 @@ class TestExcelSplitter(unittest.TestCase):
                         'name': '支付规则',
                         'columns': {
                             'project_id': '费用所属中心',
-                            'project_account': '支付账号',
+                            'payment_account': '支付账号',
                             'employer_name': '公司'
                         }
                     }
@@ -574,7 +574,7 @@ class TestExcelSplitter(unittest.TestCase):
                             'project_id': '费用所属中心',
                             'project_category': '费用类别',
                             'project_hours': '实际出勤',
-                            'project_account': '支付账号',
+                            'payment_account': '支付账号',
                             'employer_name': '工资所属单位'
                         }
                     },
@@ -591,7 +591,7 @@ class TestExcelSplitter(unittest.TestCase):
                         'name': '支付规则',
                         'columns': {
                             'project_id': '费用所属中心',
-                            'project_account': '支付账号',
+                            'payment_account': '支付账号',
                             'employer_name': '公司'
                         }
                     }
