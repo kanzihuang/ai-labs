@@ -557,6 +557,351 @@ class TestExcelSplitter(unittest.TestCase):
         self.assertEqual(row3_data[6], '研发部')
         self.assertEqual(row3_data[9], 'Account_RD')
 
+    # --- Config validation tests ---
+
+    def _make_minimal_config(self):
+        """Helper: minimal valid config dict."""
+        return {
+            'input': {
+                'path': 'test_input.xlsx',
+                'sheet': {
+                    'source': {
+                        'name': '工资',
+                        'columns': {
+                            'employee_id': '工号',
+                            'project_id': '费用所属中心',
+                            'project_category': '费用类别',
+                            'project_hours': '实际出勤',
+                            'project_account': '支付账号'
+                        }
+                    },
+                    'reference': {
+                        'name': '工时',
+                        'columns': {
+                            'employee_id': '工号',
+                            'project_id': '费用所属中心',
+                            'project_category': '费用类别',
+                            'project_hours': '实际出勤'
+                        }
+                    },
+                    'payment': {
+                        'name': '支付规则',
+                        'columns': {
+                            'project_id': '费用所属中心',
+                            'project_account': '支付账号'
+                        }
+                    }
+                },
+                'splitting_columns': ['基本工资']
+            },
+            'output': {
+                'path': 'test_output.xlsx',
+                'sheet': {
+                    'result': {
+                        'name': '工资拆分'
+                    }
+                }
+            }
+        }
+
+    def test_valid_config_passes_check(self):
+        """Valid config should pass validate_config without error."""
+        from main import validate_config
+        config = self._make_minimal_config()
+        self.assertTrue(validate_config(config))
+
+    def test_config_missing_input_section(self):
+        """Config missing 'input' key -> SystemExit."""
+        from main import validate_config
+        with self.assertRaises(SystemExit):
+            validate_config({'output': {}})
+
+    def test_config_missing_input_path(self):
+        """Config missing input.path -> SystemExit."""
+        from main import validate_config
+        config = self._make_minimal_config()
+        del config['input']['path']
+        with self.assertRaises(SystemExit):
+            validate_config(config)
+
+    def test_config_missing_splitting_columns(self):
+        """Config missing splitting_columns -> SystemExit."""
+        from main import validate_config
+        config = self._make_minimal_config()
+        del config['input']['splitting_columns']
+        with self.assertRaises(SystemExit):
+            validate_config(config)
+
+    def test_config_non_list_splitting_columns(self):
+        """Config with non-list splitting_columns -> SystemExit."""
+        from main import validate_config
+        config = self._make_minimal_config()
+        config['input']['splitting_columns'] = 'not_a_list'
+        with self.assertRaises(SystemExit):
+            validate_config(config)
+
+    def test_config_missing_output_section(self):
+        """Config missing 'output' section -> SystemExit."""
+        from main import validate_config
+        config = self._make_minimal_config()
+        del config['output']
+        with self.assertRaises(SystemExit):
+            validate_config(config)
+
+    def test_config_missing_source_name(self):
+        """Config missing source.name -> SystemExit."""
+        from main import validate_config
+        config = self._make_minimal_config()
+        del config['input']['sheet']['source']['name']
+        with self.assertRaises(SystemExit):
+            validate_config(config)
+
+    def test_config_missing_reference_columns(self):
+        """Config missing reference columns -> SystemExit."""
+        from main import validate_config
+        config = self._make_minimal_config()
+        del config['input']['sheet']['reference']['columns']['project_hours']
+        with self.assertRaises(SystemExit):
+            validate_config(config)
+
+    # --- Data quality pre-check tests ---
+
+    def test_none_employee_id_in_reference(self):
+        """Reference row with None employee_id -> SystemExit."""
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导']
+        self.source_sheet.append(source_headers)
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, '研发', '研发部', 21, 'BB'])
+
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+        self.reference_sheet.append(['张三', None, '研发', '1', 5])  # None employee_id
+
+        payment_headers = ['费用所属中心', '支付账号']
+        self.payment_sheet.append(payment_headers)
+        self.payment_sheet.append(['1', 'Account_X'])
+        self.payment_sheet.append(['研发部', 'Account_RD'])
+
+        self.wb.save('test_input.xlsx')
+        with self.assertRaises(SystemExit):
+            process_excel(self.config)
+
+    def test_none_employee_id_in_source(self):
+        """Source row with None employee_id -> SystemExit."""
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导']
+        self.source_sheet.append(source_headers)
+        self.source_sheet.append(['张三', None, '中国', 1000.00, 3000.00, '研发', '研发部', 21, 'BB'])
+
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
+
+        payment_headers = ['费用所属中心', '支付账号']
+        self.payment_sheet.append(payment_headers)
+        self.payment_sheet.append(['1', 'Account_X'])
+        self.payment_sheet.append(['研发部', 'Account_RD'])
+
+        self.wb.save('test_input.xlsx')
+        with self.assertRaises(SystemExit):
+            process_excel(self.config)
+
+    def test_negative_hours_in_reference(self):
+        """Reference row with negative hours -> SystemExit."""
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导']
+        self.source_sheet.append(source_headers)
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, '研发', '研发部', 21, 'BB'])
+
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', -5])  # Negative hours
+
+        payment_headers = ['费用所属中心', '支付账号']
+        self.payment_sheet.append(payment_headers)
+        self.payment_sheet.append(['1', 'Account_X'])
+        self.payment_sheet.append(['研发部', 'Account_RD'])
+
+        self.wb.save('test_input.xlsx')
+        with self.assertRaises(SystemExit):
+            process_excel(self.config)
+
+    def test_non_numeric_hours_in_reference(self):
+        """Reference row with text in hours column -> SystemExit."""
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导']
+        self.source_sheet.append(source_headers)
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, '研发', '研发部', 21, 'BB'])
+
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 'N/A'])  # Non-numeric hours
+
+        payment_headers = ['费用所属中心', '支付账号']
+        self.payment_sheet.append(payment_headers)
+        self.payment_sheet.append(['1', 'Account_X'])
+        self.payment_sheet.append(['研发部', 'Account_RD'])
+
+        self.wb.save('test_input.xlsx')
+        with self.assertRaises(SystemExit):
+            process_excel(self.config)
+
+    def test_employee_id_type_mismatch(self):
+        """Mixed int/str employee_id across sheets -> SystemExit."""
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导']
+        self.source_sheet.append(source_headers)
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, '研发', '研发部', 21, 'BB'])
+
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+        # Reference uses int type for employee_id, source uses str
+        self.reference_sheet.append(['张三', 123, '研发', '1', 5])
+
+        payment_headers = ['费用所属中心', '支付账号']
+        self.payment_sheet.append(payment_headers)
+        self.payment_sheet.append(['1', 'Account_X'])
+        self.payment_sheet.append(['研发部', 'Account_RD'])
+
+        self.wb.save('test_input.xlsx')
+        with self.assertRaises(SystemExit):
+            process_excel(self.config)
+
+    # --- Output verification tests ---
+
+    def test_output_sum_consistency(self):
+        """Splitting column totals in output should match source sums."""
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导']
+        self.source_sheet.append(source_headers)
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, '研发', '研发部', 21, 'BB'])
+        self.source_sheet.append(['李四', 'BB', '中国', 2000.00, 4000.00, '研发', '研发部', 21, 'CC'])
+
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 2])
+        self.reference_sheet.append(['张三', 'AA', '研发', '2', 3])
+
+        # Distinct accounts
+        payment_headers = ['费用所属中心', '支付账号']
+        self.payment_sheet.append(payment_headers)
+        self.payment_sheet.append(['1', 'Account_1'])
+        self.payment_sheet.append(['2', 'Account_2'])
+        self.payment_sheet.append(['研发部', 'Account_RD'])
+
+        self.wb.save('test_input.xlsx')
+        process_excel(self.config)
+
+        # Verify output sums
+        output_wb = load_workbook('test_output.xlsx')
+        result_sheet = output_wb['工资拆分']
+
+        for col_idx in [4, 5]:  # 基本工资 and 岗位工资
+            result_sum = sum(
+                float(row[col_idx - 1].value)
+                for row in result_sheet.iter_rows(min_row=2)
+                if row[col_idx - 1].value is not None
+            )
+            source_sum = sum(
+                float(row[col_idx - 1].value)
+                for row in self.source_sheet.iter_rows(min_row=2)
+                if row[col_idx - 1].value is not None
+            )
+            self.assertAlmostEqual(result_sum, source_sum, places=1)
+
+    def test_output_file_valid(self):
+        """Output file can be reopened and has expected structure."""
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导']
+        self.source_sheet.append(source_headers)
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, '研发', '1', 21, 'BB'])
+
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
+
+        payment_headers = ['费用所属中心', '支付账号']
+        self.payment_sheet.append(payment_headers)
+        self.payment_sheet.append(['1', 'Account_X'])
+
+        self.wb.save('test_input.xlsx')
+        process_excel(self.config)
+
+        # Verify output file
+        self.assertTrue(os.path.exists('test_output.xlsx'))
+        wb = load_workbook('test_output.xlsx')
+        self.assertIn('工资拆分', wb.sheetnames)
+        self.assertIn('工资', wb.sheetnames)
+        self.assertIn('工时', wb.sheetnames)
+        wb.close()
+
+    # --- Payment-optional integration test ---
+
+    def test_split_without_payment_config(self):
+        """Config without payment section: splits correctly, no merge, no project_account column."""
+        config = {
+            'input': {
+                'path': 'test_input.xlsx',
+                'sheet': {
+                    'source': {
+                        'name': '工资',
+                        'columns': {
+                            'employee_id': '工号',
+                            'project_id': '费用所属中心',
+                            'project_category': '费用类别',
+                            'project_hours': '实际出勤'
+                        }
+                    },
+                    'reference': {
+                        'name': '工时',
+                        'columns': {
+                            'employee_id': '工号',
+                            'project_id': '费用所属中心',
+                            'project_category': '费用类别',
+                            'project_hours': '实际出勤'
+                        }
+                    }
+                },
+                'splitting_columns': ['基本工资', '岗位工资']
+            },
+            'output': {
+                'path': 'test_output.xlsx',
+                'sheet': {
+                    'result': {
+                        'name': '工资拆分'
+                    }
+                }
+            }
+        }
+
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导']
+        self.source_sheet.append(source_headers)
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, '研发', '研发部', 21, 'BB'])
+
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 2])
+        self.reference_sheet.append(['张三', 'AA', '研发', '2', 3])
+
+        # No payment sheet needed
+        self.wb.save('test_input.xlsx')
+        process_excel(config)
+
+        output_wb = load_workbook('test_output.xlsx')
+        result_sheet = output_wb['工资拆分']
+
+        # Should have 2 rows (split but not merged)
+        result_rows = list(result_sheet.iter_rows(min_row=2))
+        self.assertEqual(len(result_rows), 2)
+
+        # Headers should NOT include project_account
+        result_headers = [cell.value for cell in result_sheet[1]]
+        self.assertEqual(result_headers, source_headers)
+        self.assertNotIn('支付账号', result_headers)
+
+        # Verify split values
+        row1 = [cell.value for cell in result_rows[0]]
+        row2 = [cell.value for cell in result_rows[1]]
+        # Total 基本工资 = 1000, split 2/5 and 3/5
+        self.assertAlmostEqual(row1[3], 400.00, places=1)
+        self.assertAlmostEqual(row2[3], 600.00, places=1)
+        # Total 岗位工资 = 3000, split 2/5 and 3/5
+        self.assertAlmostEqual(row1[4], 1200.00, places=1)
+        self.assertAlmostEqual(row2[4], 1800.00, places=1)
+
 
 if __name__ == '__main__':
     unittest.main()

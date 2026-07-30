@@ -1,20 +1,26 @@
 input:
-  path: "input/拆分模版4.28.xlsx"
+  path: "input/data.xlsx"
   sheet:
     source:
-      name: "社保"
+      name: "输入-社保表"
       columns:
         employee_id: "工号"
         project_id: "费用所属中心"
         project_category: "费用类别"
         project_hours: "实际出勤"
+        project_account: "支付账户"
     reference:
-      name: "研发人员工时表"
+      name: "输入-工时表"
       columns:
         employee_id: "工号"
         project_id: "费用所属中心"
         project_category: "费用类别"
         project_hours: "实际出勤"
+    payment:
+      name: "输入-支付规则"
+      columns:
+        project_id: "费用所属中心"
+        project_account: "支付账户"
   splitting_columns:
   - "养老保险企业缴纳金额"
   - "养老保险个人缴纳金额"
@@ -37,8 +43,6 @@ input:
   - "缴费合计"
   - "易才企业小计"
   - "北京企业小计"
-  - "易才个人缴纳"
-  - "北京个人小计"
   - "易才个人缴纳"
   - "北京个人小计"
 output:
