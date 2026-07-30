@@ -124,7 +124,7 @@ def split_row(source_row, reference_rows, source_headers, reference_headers, con
     return result_rows
 
 def merge_rows_by_account(split_rows, source_headers, payment_mapping, config):
-    """Merge split result rows by (employee_id, project_account)."""
+    """Merge split result rows by (employee_id, payment_account)."""
     if not split_rows:
         return []
 
@@ -133,7 +133,7 @@ def merge_rows_by_account(split_rows, source_headers, payment_mapping, config):
     project_category_col = get_column_index(source_headers,
                                             config['input']['sheet']['source']['columns']['project_category'])
     project_hours_col = get_column_index(source_headers, config['input']['sheet']['source']['columns']['project_hours'])
-    project_account_col = get_column_index(source_headers,
+    payment_account_col = get_column_index(source_headers,
                                             config['input']['sheet']['source']['columns']['payment_account'])
     employer_name_col = get_column_index(source_headers,
                                           config['input']['sheet']['source']['columns']['employer_name'])
@@ -144,10 +144,10 @@ def merge_rows_by_account(split_rows, source_headers, payment_mapping, config):
         if get_column_index(source_headers, col_name) is not None
     ))
 
-    # Ensure all split rows have enough cells for project_account column
-    # (source sheet may not have the project_account column)
+    # Ensure all split rows have enough cells for payment_account column
+    # (source sheet may not have the payment_account column)
     max_cols = len(source_headers)
-    if project_account_col:
+    if payment_account_col:
         for row in split_rows:
             while len(row) < max_cols:
                 dummy = Cell(None, column=len(row) + 1)
@@ -155,7 +155,7 @@ def merge_rows_by_account(split_rows, source_headers, payment_mapping, config):
                 dummy._style = copy(row[0]._style) if row else None
                 row.append(dummy)
 
-    # Group rows by (employee_id, project_account), preserving first-occurrence order
+    # Group rows by (employee_id, payment_account), preserving first-occurrence order
     groups = []      # [(key, [rows])]
     group_keys = []  # parallel list for fast lookup
 
@@ -165,7 +165,7 @@ def merge_rows_by_account(split_rows, source_headers, payment_mapping, config):
         employer_name = row[employer_name_col - 1].value if employer_name_col else None
         employer_name_str = str(employer_name).strip() if employer_name is not None else ''
 
-        # Use composite key (employer_name, project_id) to look up project_account
+        # Use composite key (employer_name, project_id) to look up payment_account
         lookup_key = (employer_name_str, proj_id_str)
         if lookup_key not in payment_mapping:
             fatal(f"Error: (employer_name='{employer_name_str}', project_id='{proj_id_str}') "
@@ -233,8 +233,8 @@ def merge_rows_by_account(split_rows, source_headers, payment_mapping, config):
             merged_row[project_category_col - 1].value = ','.join(proj_categories)
         if project_hours_col:
             merged_row[project_hours_col - 1].value = round(total_hours, 2)
-        if project_account_col:
-            merged_row[project_account_col - 1].value = proj_account
+        if payment_account_col:
+            merged_row[payment_account_col - 1].value = proj_account
 
         # Set summed splitting columns
         for col_idx, sum_val in splitting_sums.items():
@@ -327,7 +327,7 @@ def validate_sheets(config, wb, payment_configured=True):
     if payment_configured:
         payment_project_id_col = get_column_index(payment_headers,
                                                   config['input']['sheet']['payment']['columns']['project_id'])
-        payment_project_account_col = get_column_index(payment_headers,
+        payment_payment_account_col = get_column_index(payment_headers,
                                                         config['input']['sheet']['payment']['columns']['payment_account'])
         payment_employer_name_col = get_column_index(payment_headers,
                                                       config['input']['sheet']['payment']['columns']['employer_name'])
@@ -349,12 +349,12 @@ def validate_sheets(config, wb, payment_configured=True):
 
     # Payment checks (only if payment is configured)
     if payment_configured:
-        # Check 2 & 3: Payment table - no duplicate (employer_name, project_id) + project_account not empty
+        # Check 2 & 3: Payment table - no duplicate (employer_name, project_id) + payment_account not empty
         seen_payment_pairs = set()
         reported_duplicates = set()
         for row in payment.iter_rows(min_row=2):
             proj_id = row[payment_project_id_col - 1].value
-            proj_account = row[payment_project_account_col - 1].value
+            proj_account = row[payment_payment_account_col - 1].value
             employer_name = row[payment_employer_name_col - 1].value
 
             # Skip rows with empty project_id or empty employer_name
@@ -376,9 +376,9 @@ def validate_sheets(config, wb, payment_configured=True):
                 continue
             seen_payment_pairs.add(pair)
 
-            # Check 3: project_account must not be empty
+            # Check 3: payment_account must not be empty
             if proj_account is None or str(proj_account).strip() == '':
-                errors.append(f"project_id '{proj_id_str}' has empty project_account in "
+                errors.append(f"project_id '{proj_id_str}' has empty payment_account in "
                              f"payment sheet '{payment_sheet}'")
                 continue
 
@@ -652,7 +652,7 @@ def validate_config(config):
                 else:
                     errors.append("Missing or incomplete 'input.sheet.payment' configuration")
 
-            # Conflict check: project_account or employer_name in source columns but no payment
+            # Conflict check: payment_account or employer_name in source columns but no payment
             source_cols = sheets.get('source', {}).get('columns', {})
             if 'payment_account' in source_cols and not payment_configured:
                 errors.append("'payment_account' is specified in source columns "
@@ -738,14 +738,14 @@ def process_excel(config):
             new_cell.value = cell.value
             copy_cell_style(cell, new_cell)
 
-        # Ensure project_account column exists in source_headers (only if payment is configured)
+        # Ensure payment_account column exists in source_headers (only if payment is configured)
         if payment_configured:
-            project_account_name = config['input']['sheet']['source']['columns'].get('payment_account')
-            if project_account_name and get_column_index(source_headers, project_account_name) is None:
+            payment_account_name = config['input']['sheet']['source']['columns'].get('payment_account')
+            if payment_account_name and get_column_index(source_headers, payment_account_name) is None:
                 new_col = len(source_headers) + 1
                 header_cell = result.cell(row=1, column=new_col)
-                header_cell.value = project_account_name
-                source_headers.append(project_account_name)
+                header_cell.value = payment_account_name
+                source_headers.append(payment_account_name)
 
         # Process data rows
         current_row = 2

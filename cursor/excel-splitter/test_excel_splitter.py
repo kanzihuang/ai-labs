@@ -95,7 +95,7 @@ class TestExcelSplitter(unittest.TestCase):
         output_wb = load_workbook('test_output.xlsx')
         result_sheet = output_wb['工资拆分']
 
-        # Result headers should be source headers + project_account column
+        # Result headers should be source headers + payment_account column
         result_headers = [cell.value for cell in result_sheet[1]]
         expected_headers = source_headers + ['支付账号']
         self.assertEqual(expected_headers, result_headers)
@@ -130,7 +130,7 @@ class TestExcelSplitter(unittest.TestCase):
         output_wb = load_workbook('test_output.xlsx')
         result_sheet = output_wb['工资拆分']
 
-        # Check if data in row 2 matches the source data plus project_account
+        # Check if data in row 2 matches the source data plus payment_account
         result_data = [cell.value for cell in result_sheet[2]]
         expected_data = source_data + ['Account_RD']
         self.assertEqual(expected_data, result_data)
@@ -172,7 +172,7 @@ class TestExcelSplitter(unittest.TestCase):
         output_wb = load_workbook('test_output.xlsx')
         result_sheet = output_wb['工资拆分']
 
-        # Expected results with project_account column added (no merge since accounts differ)
+        # Expected results with payment_account column added (no merge since accounts differ)
         expected_results = [
             ['张三', 'AA', '中国', 111.11, 333.33, '研发', '1', 1, 'BB', '公司A', 'Account1'],
             ['张三', 'AA', '中国', 444.44, 1333.33, '研发', '2', 4, 'BB', '公司A', 'Account2'],
@@ -295,7 +295,7 @@ class TestExcelSplitter(unittest.TestCase):
         self.assertEqual(result_row[5], '研发,销售')   # project_category column
         self.assertEqual(result_row[6], '1,2')          # project_id (merged)
         self.assertEqual(result_row[7], 5)              # total hours
-        self.assertEqual(result_row[10], 'Account_X')    # project_account
+        self.assertEqual(result_row[10], 'Account_X')    # payment_account
 
     # --- Validation tests ---
 
@@ -341,7 +341,7 @@ class TestExcelSplitter(unittest.TestCase):
             process_excel(self.config)
 
     def test_payment_empty_account(self):
-        """Payment has non-empty project_id with empty project_account -> fatal"""
+        """Payment has non-empty project_id with empty payment_account -> fatal"""
         source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
         self.source_sheet.append(source_headers)
         self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, '研发', '研发部', 21, 'BB', '公司A'])
@@ -835,7 +835,7 @@ class TestExcelSplitter(unittest.TestCase):
     # --- Payment-optional integration test ---
 
     def test_split_without_payment_config(self):
-        """Config without payment section: splits correctly, no merge, no project_account column."""
+        """Config without payment section: splits correctly, no merge, no payment_account column."""
         config = {
             'input': {
                 'path': 'test_input.xlsx',
@@ -891,7 +891,7 @@ class TestExcelSplitter(unittest.TestCase):
         result_rows = list(result_sheet.iter_rows(min_row=2))
         self.assertEqual(len(result_rows), 2)
 
-        # Headers should NOT include project_account
+        # Headers should NOT include payment_account
         result_headers = [cell.value for cell in result_sheet[1]]
         self.assertEqual(result_headers, source_headers)
         self.assertNotIn('支付账号', result_headers)
