@@ -26,6 +26,8 @@ input:
   splitting_columns:
   - 基本工资
   - 岗位工资
+# 每处理多少行输出一次进度（缺省 100，设为 1 则每行都输出）
+progress_interval: 100
 output:
   path: "output/项目成本拆分.xlsx"
   sheet:

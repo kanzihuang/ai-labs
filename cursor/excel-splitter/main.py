@@ -4,6 +4,7 @@
 import argparse
 import os
 import sys
+import time
 import traceback
 import yaml
 from openpyxl import load_workbook
@@ -39,17 +40,23 @@ def get_column_index(headers, column_name):
     except ValueError:
         return None
 
-def split_row(source_row, reference_rows, source_headers, reference_headers, config):
+def split_row(source_row, ref_by_employee, source_headers, reference_headers, config,
+              source_col_map, ref_col_map, splitting_col_set):
     """Split a row based on reference data."""
-    employee_id_col = get_column_index(source_headers, config['input']['sheet']['source']['columns']['employee_id'])
+    # Precompute all column indices once using O(1) map lookups
+    employee_id_col = source_col_map[config['input']['sheet']['source']['columns']['employee_id']]
+    ref_hours_col = ref_col_map[config['input']['sheet']['reference']['columns']['project_hours']]
+    project_id_col = source_col_map.get(config['input']['sheet']['source']['columns']['project_id'])
+    project_category_col = source_col_map.get(config['input']['sheet']['source']['columns']['project_category'])
+    project_hours_col = source_col_map.get(config['input']['sheet']['source']['columns']['project_hours'])
+    ref_project_id_col = ref_col_map.get(config['input']['sheet']['reference']['columns']['project_id'])
+    ref_project_category_col = ref_col_map.get(config['input']['sheet']['reference']['columns']['project_category'])
+    ref_project_hours_col = ref_col_map.get(config['input']['sheet']['reference']['columns']['project_hours'])
+
     employee_id = source_row[employee_id_col - 1].value
 
-    # Find matching rows in reference sheet
-    matching_ref_rows = []
-    for ref_row in reference_rows:
-        ref_employee_id = ref_row[get_column_index(reference_headers, config['input']['sheet']['reference']['columns']['employee_id']) - 1].value
-        if ref_employee_id == employee_id:
-            matching_ref_rows.append(ref_row)
+    # O(1) lookup in pre-indexed reference dict
+    matching_ref_rows = ref_by_employee.get(employee_id, [])
 
     if not matching_ref_rows:
         # No matching reference rows, copy source row as is
@@ -58,12 +65,11 @@ def split_row(source_row, reference_rows, source_headers, reference_headers, con
     # 计算reference表中匹配行的总工时
     total_ref_hours = 0
     for ref_row in matching_ref_rows:
-        ref_hours_col = get_column_index(reference_headers, config['input']['sheet']['reference']['columns']['project_hours'])
         try:
             ref_hours = float(ref_row[ref_hours_col - 1].value)
         except (ValueError, TypeError):
             fatal(f"Error: Non-numeric project_hours '{ref_row[ref_hours_col - 1].value}' "
-                  f"in reference sheet for employee_id='{ref_employee_id}'")
+                  f"in reference sheet for employee_id='{employee_id}'")
         total_ref_hours += ref_hours
 
     if total_ref_hours == 0:
@@ -74,7 +80,6 @@ def split_row(source_row, reference_rows, source_headers, reference_headers, con
     remain_row = deepcopy(source_row)
     result_rows = []
     for i, ref_row in enumerate(matching_ref_rows):
-        ref_hours_col = get_column_index(reference_headers, config['input']['sheet']['reference']['columns']['project_hours'])
         try:
             ref_hours = float(ref_row[ref_hours_col - 1].value)
         except (ValueError, TypeError):
@@ -86,10 +91,7 @@ def split_row(source_row, reference_rows, source_headers, reference_headers, con
         new_row = []
         for j, cell in enumerate(source_row):
             new_cell = copy(cell)
-            if cell.value is not None and cell.column in [
-                get_column_index(source_headers, col_name)
-                for col_name in config['input']['splitting_columns']
-            ]:
+            if cell.value is not None and cell.column in splitting_col_set:
                 # Split numeric values
                 try:
                     if i < len(matching_ref_rows) - 1 :
@@ -102,20 +104,12 @@ def split_row(source_row, reference_rows, source_headers, reference_headers, con
             new_row.append(new_cell)
 
         # 只更新project_id, project_category, project_hours这三列
-        project_id_col = get_column_index(source_headers, config['input']['sheet']['source']['columns']['project_id'])
-        project_category_col = get_column_index(source_headers, config['input']['sheet']['source']['columns']['project_category'])
-        project_hours_col = get_column_index(source_headers, config['input']['sheet']['source']['columns']['project_hours'])
-        
-        ref_project_id_col = get_column_index(reference_headers, config['input']['sheet']['reference']['columns']['project_id'])
-        ref_project_category_col = get_column_index(reference_headers, config['input']['sheet']['reference']['columns']['project_category'])
-        ref_project_hours_col = get_column_index(reference_headers, config['input']['sheet']['reference']['columns']['project_hours'])
-        
         if project_id_col and ref_project_id_col:
             new_row[project_id_col - 1].value = ref_row[ref_project_id_col - 1].value
-            
+
         if project_category_col and ref_project_category_col:
             new_row[project_category_col - 1].value = ref_row[ref_project_category_col - 1].value
-            
+
         if project_hours_col and ref_project_hours_col:
             new_row[project_hours_col - 1].value = ref_row[ref_project_hours_col - 1].value
 
@@ -123,26 +117,22 @@ def split_row(source_row, reference_rows, source_headers, reference_headers, con
 
     return result_rows
 
-def merge_rows_by_account(split_rows, source_headers, payment_mapping, config):
+def merge_rows_by_account(split_rows, source_headers, payment_mapping, config,
+                          source_col_map, splitting_col_list):
     """Merge split result rows by (employee_id, payment_account)."""
     if not split_rows:
         return []
 
-    employee_id_col = get_column_index(source_headers, config['input']['sheet']['source']['columns']['employee_id'])
-    project_id_col = get_column_index(source_headers, config['input']['sheet']['source']['columns']['project_id'])
-    project_category_col = get_column_index(source_headers,
-                                            config['input']['sheet']['source']['columns']['project_category'])
-    project_hours_col = get_column_index(source_headers, config['input']['sheet']['source']['columns']['project_hours'])
-    payment_account_col = get_column_index(source_headers,
-                                            config['input']['sheet']['source']['columns']['payment_account'])
-    employer_name_col = get_column_index(source_headers,
-                                          config['input']['sheet']['source']['columns']['employer_name'])
+    # Precompute all column indices once using O(1) map lookups
+    employee_id_col = source_col_map.get(config['input']['sheet']['source']['columns']['employee_id'])
+    project_id_col = source_col_map.get(config['input']['sheet']['source']['columns']['project_id'])
+    project_category_col = source_col_map.get(config['input']['sheet']['source']['columns']['project_category'])
+    project_hours_col = source_col_map.get(config['input']['sheet']['source']['columns']['project_hours'])
+    payment_account_col = source_col_map.get(config['input']['sheet']['source']['columns']['payment_account'])
+    employer_name_col = source_col_map.get(config['input']['sheet']['source']['columns']['employer_name'])
 
-    splitting_col_indices = list(dict.fromkeys(
-        get_column_index(source_headers, col_name)
-        for col_name in config['input']['splitting_columns']
-        if get_column_index(source_headers, col_name) is not None
-    ))
+    splitting_col_indices = splitting_col_list  # Already precomputed
+
 
     # Ensure all split rows have enough cells for payment_account column
     # (source sheet may not have the payment_account column)
@@ -156,8 +146,8 @@ def merge_rows_by_account(split_rows, source_headers, payment_mapping, config):
                 row.append(dummy)
 
     # Group rows by (employee_id, payment_account), preserving first-occurrence order
-    groups = []      # [(key, [rows])]
-    group_keys = []  # parallel list for fast lookup
+    # Dict maintains insertion order (Python 3.7+)
+    groups = {}  # group_key -> [rows]
 
     for row in split_rows:
         proj_id = row[project_id_col - 1].value
@@ -176,16 +166,14 @@ def merge_rows_by_account(split_rows, source_headers, payment_mapping, config):
 
         group_key = (emp_id, proj_account)
 
-        if group_key in group_keys:
-            idx = group_keys.index(group_key)
-            groups[idx][1].append(row)
+        if group_key in groups:
+            groups[group_key].append(row)
         else:
-            group_keys.append(group_key)
-            groups.append((group_key, [row]))
+            groups[group_key] = [row]
 
     # Merge each group
     merged_rows = []
-    for group_key, rows in groups:
+    for group_key, rows in groups.items():
         emp_id, proj_account = group_key
 
         # Start with deep copy of first row
@@ -332,22 +320,10 @@ def validate_sheets(config, wb, payment_configured=True):
         payment_employer_name_col = get_column_index(payment_headers,
                                                       config['input']['sheet']['payment']['columns']['employer_name'])
 
-    # Check 1: Reference table - no duplicate (employee_id, project_id) pairs
-    ref_pairs = set()
-    reported_ref_duplicates = set()
-    for row in reference.iter_rows(min_row=2):
-        emp_id = row[ref_employee_id_col - 1].value
-        proj_id = row[ref_project_id_col - 1].value
-        pair = (emp_id, proj_id)
-        if pair in ref_pairs:
-            if pair not in reported_ref_duplicates:
-                errors.append(f"Duplicate (employee_id='{emp_id}', project_id='{proj_id}') "
-                             f"found in reference sheet '{reference_sheet}'")
-                reported_ref_duplicates.add(pair)
-        else:
-            ref_pairs.add(pair)
-
-    # Payment checks (only if payment is configured)
+    # --- Payment checks (only if payment is configured) ---
+    # Build payment_mapping and payment_project_ids before reference/source scans
+    payment_project_ids = set()
+    ref_employee_ids = set()
     if payment_configured:
         # Check 2 & 3: Payment table - no duplicate (employer_name, project_id) + payment_account not empty
         seen_payment_pairs = set()
@@ -387,106 +363,113 @@ def validate_sheets(config, wb, payment_configured=True):
         # Build set of all project_ids in payment for Check 4 partial check
         payment_project_ids = set(pid for (_, pid) in payment_mapping.keys())
 
-        # Check 4: Reference table - all project_id values must exist in at least one
-        #           payment entry (partial check; full composite check at merge time)
-        ref_missing_pids = set()
-        for row in reference.iter_rows(min_row=2):
-            proj_id = row[ref_project_id_col - 1].value
-            if proj_id is not None and str(proj_id).strip() != '':
-                proj_id_str = str(proj_id).strip()
-                if proj_id_str not in payment_project_ids:
-                    ref_missing_pids.add(proj_id_str)
+    # --- Consolidated single-pass scan of reference sheet ---
+    # Checks 1, 4, 6, 8, 9, and partial 10 (type collection)
+    ref_pairs = set()
+    reported_ref_duplicates = set()
+    ref_missing_pids = set() if payment_configured else None
+    reported_empty_ref_id = False
+    ref_id_types = set()
+
+    for row_num, row in enumerate(reference.iter_rows(min_row=2), start=2):
+        emp_id = row[ref_employee_id_col - 1].value
+        proj_id = row[ref_project_id_col - 1].value
+        hours_val = row[ref_hours_col - 1].value
+
+        # Check 6: empty employee_id
+        if not reported_empty_ref_id and (emp_id is None or
+           (isinstance(emp_id, str) and str(emp_id).strip() == '')):
+            errors.append(f"Empty employee_id in reference sheet '{reference_sheet}' row {row_num}")
+            reported_empty_ref_id = True
+
+        # Check 10: type info (skip if empty)
+        if emp_id is not None and not (isinstance(emp_id, str) and str(emp_id).strip() == ''):
+            ref_id_types.add(type(emp_id).__name__)
+
+        # Build ref_employee_ids for Check 5 (source scan)
+        if payment_configured and emp_id is not None:
+            ref_employee_ids.add(emp_id)
+
+        # Check 1: duplicate (employee_id, project_id)
+        if emp_id is not None and proj_id is not None:
+            pair = (emp_id, proj_id)
+            if pair in ref_pairs:
+                if pair not in reported_ref_duplicates:
+                    errors.append(f"Duplicate (employee_id='{emp_id}', project_id='{proj_id}') "
+                                  f"found in reference sheet '{reference_sheet}'")
+                    reported_ref_duplicates.add(pair)
+            else:
+                ref_pairs.add(pair)
+
+        # Check 4: project_id in payment (only if payment configured)
+        if payment_configured and proj_id is not None and str(proj_id).strip() != '':
+            proj_id_str = str(proj_id).strip()
+            if proj_id_str not in payment_project_ids:
+                ref_missing_pids.add(proj_id_str)
+
+        # Checks 8 and 9: non-numeric and negative hours
+        if hours_val is not None:
+            try:
+                hours_float = float(hours_val)
+                if hours_float < 0:
+                    errors.append(f"Negative project_hours '{hours_val}' in reference sheet "
+                                  f"'{reference_sheet}' row {row_num} "
+                                  f"(employee_id='{emp_id}', project_id='{proj_id}')")
+            except (ValueError, TypeError):
+                errors.append(f"Non-numeric project_hours '{hours_val}' in reference sheet "
+                              f"'{reference_sheet}' row {row_num} "
+                              f"(employee_id='{emp_id}', project_id='{proj_id}')")
+
+    # Report Check 4 errors after reference scan
+    if payment_configured and ref_missing_pids:
         for pid in sorted(ref_missing_pids):
             errors.append(f"project_id '{pid}' in reference sheet '{reference_sheet}' "
                          f"has no matching record in payment sheet '{payment_sheet}'")
 
-        # Check 5: Source table - rows without reference match (not split) must have
-        #           their (employer_name, project_id) in payment
-        ref_employee_ids = set()
-        for row in reference.iter_rows(min_row=2):
-            emp_id = row[ref_employee_id_col - 1].value
-            if emp_id is not None:
-                ref_employee_ids.add(emp_id)
+    # --- Consolidated single-pass scan of source sheet ---
+    # Checks 5, 7, and partial 10 (type collection)
+    src_employee_id_col = get_column_index(source_headers,
+                                           config['input']['sheet']['source']['columns']['employee_id'])
+    reported_empty_src_id = False
+    src_id_types = set()
+    source_missing_pairs = set() if payment_configured else None
 
-        src_employee_id_col = get_column_index(source_headers,
-                                               config['input']['sheet']['source']['columns']['employee_id'])
+    if payment_configured:
         src_employer_name_col = get_column_index(source_headers,
                                                   config['input']['sheet']['source']['columns']['employer_name'])
-        source_missing_pairs = set()
-        if source_project_id_col and src_employer_name_col:
-            for row in source.iter_rows(min_row=2):
-                emp_id = row[src_employee_id_col - 1].value
-                # Only check rows that won't be split (no reference match)
-                if emp_id in ref_employee_ids:
-                    continue
-                proj_id = row[source_project_id_col - 1].value
-                employer_name = row[src_employer_name_col - 1].value
-                if proj_id is not None and str(proj_id).strip() != '' \
-                   and employer_name is not None and str(employer_name).strip() != '':
-                    pair = (str(employer_name).strip(), str(proj_id).strip())
-                    if pair not in payment_mapping:
-                        source_missing_pairs.add(pair)
+
+    for row_num, row in enumerate(source.iter_rows(min_row=2), start=2):
+        emp_id = row[src_employee_id_col - 1].value
+
+        # Check 7: empty employee_id
+        if not reported_empty_src_id and (emp_id is None or
+           (isinstance(emp_id, str) and str(emp_id).strip() == '')):
+            errors.append(f"Empty employee_id in source sheet '{source_sheet}' row {row_num}")
+            reported_empty_src_id = True
+
+        # Check 10: type info
+        if emp_id is not None and not (isinstance(emp_id, str) and str(emp_id).strip() == ''):
+            src_id_types.add(type(emp_id).__name__)
+
+        # Check 5: non-split rows must have payment mapping
+        if payment_configured and source_project_id_col and src_employer_name_col:
+            if emp_id in ref_employee_ids:
+                continue  # Will be split; source project_id replaced
+            proj_id = row[source_project_id_col - 1].value
+            employer_name = row[src_employer_name_col - 1].value
+            if proj_id is not None and str(proj_id).strip() != '' \
+               and employer_name is not None and str(employer_name).strip() != '':
+                pair = (str(employer_name).strip(), str(proj_id).strip())
+                if pair not in payment_mapping:
+                    source_missing_pairs.add(pair)
+
+    # Report Check 5 errors after source scan
+    if payment_configured and source_missing_pairs:
         for pair in sorted(source_missing_pairs):
             errors.append(f"(employer_name='{pair[0]}', project_id='{pair[1]}') in source sheet "
                          f"'{source_sheet}' has no matching record in payment sheet '{payment_sheet}'")
 
-    # --- New data quality pre-checks (6-10) ---
-
-    src_employee_id_col = get_column_index(source_headers,
-                                           config['input']['sheet']['source']['columns']['employee_id'])
-
-    # Check 6: None/empty employee_id in reference rows
-    for row_num, row in enumerate(reference.iter_rows(min_row=2), start=2):
-        emp_id = row[ref_employee_id_col - 1].value
-        if emp_id is None or (isinstance(emp_id, str) and emp_id.strip() == ''):
-            errors.append(f"Empty employee_id in reference sheet '{reference_sheet}' row {row_num}")
-            break  # One error is enough
-
-    # Check 7: None/empty employee_id in source rows
-    for row_num, row in enumerate(source.iter_rows(min_row=2), start=2):
-        emp_id = row[src_employee_id_col - 1].value
-        if emp_id is None or (isinstance(emp_id, str) and emp_id.strip() == ''):
-            errors.append(f"Empty employee_id in source sheet '{source_sheet}' row {row_num}")
-            break
-
-    # Check 8: Non-numeric project_hours in reference
-    for row_num, row in enumerate(reference.iter_rows(min_row=2), start=2):
-        hours_val = row[ref_hours_col - 1].value
-        if hours_val is not None:
-            try:
-                float(hours_val)
-            except (ValueError, TypeError):
-                emp_id = row[ref_employee_id_col - 1].value
-                proj_id = row[ref_project_id_col - 1].value
-                errors.append(f"Non-numeric project_hours '{hours_val}' in reference sheet "
-                             f"'{reference_sheet}' row {row_num} "
-                             f"(employee_id='{emp_id}', project_id='{proj_id}')")
-
-    # Check 9: Negative project_hours in reference
-    for row_num, row in enumerate(reference.iter_rows(min_row=2), start=2):
-        hours_val = row[ref_hours_col - 1].value
-        if hours_val is not None:
-            try:
-                if float(hours_val) < 0:
-                    emp_id = row[ref_employee_id_col - 1].value
-                    proj_id = row[ref_project_id_col - 1].value
-                    errors.append(f"Negative project_hours '{hours_val}' in reference sheet "
-                                 f"'{reference_sheet}' row {row_num} "
-                                 f"(employee_id='{emp_id}', project_id='{proj_id}')")
-            except (ValueError, TypeError):
-                pass  # Already caught by Check 8
-
     # Check 10: employee_id type mismatch between sheets
-    ref_id_types = set()
-    src_id_types = set()
-    for row in reference.iter_rows(min_row=2):
-        emp_id = row[ref_employee_id_col - 1].value
-        if emp_id is not None and not (isinstance(emp_id, str) and emp_id.strip() == ''):
-            ref_id_types.add(type(emp_id).__name__)
-    for row in source.iter_rows(min_row=2):
-        emp_id = row[src_employee_id_col - 1].value
-        if emp_id is not None and not (isinstance(emp_id, str) and emp_id.strip() == ''):
-            src_id_types.add(type(emp_id).__name__)
     all_id_types = ref_id_types | src_id_types
     if len(all_id_types) > 1:
         types_str = ', '.join(sorted(all_id_types))
@@ -545,12 +528,18 @@ def verify_output(config, source_headers):
             errors.append(f"Empty row {i} in result sheet '{result_sheet_name}'")
 
     # Check splitting columns: numeric, non-negative in result
+    # Precompute column indices for all splitting columns
+    result_col_map_verify = {}
     for col_name in splitting_columns:
         col_idx = get_column_index(result_headers, col_name)
         if col_idx is None:
             errors.append(f"Splitting column '{col_name}' not found in result headers")
-            continue
-        for i, row in enumerate(result.iter_rows(min_row=2), start=2):
+        else:
+            result_col_map_verify[col_name] = col_idx
+
+    # Single pass through result: validate numeric/non-negative for all splitting columns
+    for i, row in enumerate(result.iter_rows(min_row=2), start=2):
+        for col_name, col_idx in result_col_map_verify.items():
             val = row[col_idx - 1].value
             if val is not None:
                 try:
@@ -562,33 +551,48 @@ def verify_output(config, source_headers):
 
     # Grand total consistency: sum of each splitting column in result should
     # equal the sum in source (within rounding tolerance)
+    # Precompute column indices
+    src_col_map_verify = {}
+    res_col_map_verify = {}
     for col_name in splitting_columns:
-        src_col = get_column_index(source_out_headers, col_name)
-        res_col = get_column_index(result_headers, col_name)
-        if not src_col or not res_col:
-            continue
+        src_idx = get_column_index(source_out_headers, col_name)
+        res_idx = get_column_index(result_headers, col_name)
+        if src_idx and res_idx:
+            src_col_map_verify[col_name] = src_idx
+            res_col_map_verify[col_name] = res_idx
 
-        src_sum = 0.0
+    if src_col_map_verify:
+        # Single pass through source: sum all splitting columns
+        src_sums = {col_name: 0.0 for col_name in src_col_map_verify}
         for row in source.iter_rows(min_row=2):
-            val = row[src_col - 1].value
-            if val is not None:
-                try:
-                    src_sum += float(val)
-                except (ValueError, TypeError):
-                    pass  # Non-numeric source values were caught by pre-checks
+            for col_name, col_idx in src_col_map_verify.items():
+                val = row[col_idx - 1].value
+                if val is not None:
+                    try:
+                        src_sums[col_name] += float(val)
+                    except (ValueError, TypeError):
+                        pass  # Non-numeric source values were caught by pre-checks
 
-        res_sum = 0.0
+        # Single pass through result: sum all splitting columns
+        res_sums = {col_name: 0.0 for col_name in res_col_map_verify}
         for row in result.iter_rows(min_row=2):
-            val = row[res_col - 1].value
-            if val is not None:
-                try:
-                    res_sum += float(val)
-                except (ValueError, TypeError):
-                    pass  # Already caught above
+            for col_name, col_idx in res_col_map_verify.items():
+                val = row[col_idx - 1].value
+                if val is not None:
+                    try:
+                        res_sums[col_name] += float(val)
+                    except (ValueError, TypeError):
+                        pass  # Already caught above
 
-        if abs(res_sum - src_sum) > 0.001:
-            errors.append(f"Total mismatch for '{col_name}': "
-                         f"source sum={src_sum:.2f}, result sum={res_sum:.2f}")
+        # Compare each column's sums
+        for col_name in splitting_columns:
+            if col_name not in src_col_map_verify or col_name not in res_col_map_verify:
+                continue
+            src_sum = src_sums.get(col_name, 0.0)
+            res_sum = res_sums.get(col_name, 0.0)
+            if abs(res_sum - src_sum) > 0.001:
+                errors.append(f"Total mismatch for '{col_name}': "
+                             f"source sum={src_sum:.2f}, result sum={res_sum:.2f}")
 
     wb.close()
     return errors
@@ -716,11 +720,14 @@ def process_excel(config):
 
     try:
         # Load the workbook
+        print(f"正在加载工作簿: {input_path}")
         wb = load_workbook(input_path)
+        print("工作簿加载完成")
         
         # Validate sheets and columns
         source, reference, source_headers, reference_headers, payment_mapping = \
             validate_sheets(config, wb, payment_configured)
+        print("验证完成")
 
         # Create a new workbook for output
         output_wb = load_workbook(input_path)
@@ -747,22 +754,78 @@ def process_excel(config):
                 header_cell.value = payment_account_name
                 source_headers.append(payment_account_name)
 
+        # Precompute column name -> index maps for O(1) lookups (after source_headers is finalized)
+        source_col_map = {name: idx + 1 for idx, name in enumerate(source_headers)}
+        ref_col_map = {name: idx + 1 for idx, name in enumerate(reference_headers)}
+
+        # Precompute splitting column indices as set (fast membership test in split_row)
+        # and ordered list (for merge_rows_by_account)
+        splitting_col_set = set()
+        splitting_col_list = []
+        for col_name in config['input']['splitting_columns']:
+            idx = source_col_map.get(col_name)
+            if idx is not None:
+                splitting_col_set.add(idx)
+                if idx not in splitting_col_list:
+                    splitting_col_list.append(idx)
+
         # Process data rows
         current_row = 2
         reference_rows = list(reference.iter_rows(min_row=2))  # Convert iterator to list
+
+        # Pre-index reference rows by employee_id for O(1) lookup
+        ref_employee_id_col = ref_col_map[config['input']['sheet']['reference']['columns']['employee_id']]
+        ref_by_employee = {}
+        for ref_row in reference_rows:
+            emp_id = ref_row[ref_employee_id_col - 1].value
+            if emp_id not in ref_by_employee:
+                ref_by_employee[emp_id] = []
+            ref_by_employee[emp_id].append(ref_row)
+
+        total_source_rows = source.max_row - 1  # Subtract header row
+        total_reference_rows = len(reference_rows)
+        print(f"开始处理数据，共 {total_source_rows} 行（参考表 {total_reference_rows} 行，{len(ref_by_employee)} 个员工）")
+        progress_interval = config.get('progress_interval', 100)
+        row_counter = 0
+        t_total_start = time.time()
+        t_split_total = 0.0
+        t_merge_total = 0.0
+        t_write_total = 0.0
         for row in source.iter_rows(min_row=2):
-            split_result_rows = split_row(row, reference_rows, source_headers, reference_headers, config)
+            row_counter += 1
+            if row_counter % progress_interval == 0 or row_counter == 1:
+                elapsed = time.time() - t_total_start
+                rate = row_counter / elapsed if elapsed > 0 else 0
+                eta = (total_source_rows - row_counter) / rate if rate > 0 else 0
+                print(f"正在处理第 {row_counter}/{total_source_rows} 行 (已耗时 {elapsed:.0f}s, 速度 {rate:.1f} 行/秒, 预计剩余 {eta:.0f}s)...")
+
+            t0 = time.time()
+            split_result_rows = split_row(row, ref_by_employee, source_headers, reference_headers, config,
+                                           source_col_map, ref_col_map, splitting_col_set)
+            t_split_total += time.time() - t0
+
             # Merge split rows by payment account (only if payment is configured)
             if payment_configured:
-                merged_rows = merge_rows_by_account(split_result_rows, source_headers, payment_mapping, config)
+                t0 = time.time()
+                merged_rows = merge_rows_by_account(split_result_rows, source_headers, payment_mapping, config,
+                                                     source_col_map, splitting_col_list)
+                t_merge_total += time.time() - t0
             else:
                 merged_rows = split_result_rows
+
+            t0 = time.time()
             for result_row in merged_rows:
+                # Write values via append (fast bulk insertion)
+                result.append([cell.value for cell in result_row])
+                # Copy styles for this row
                 for cell in result_row:
                     new_cell = result.cell(row=current_row, column=cell.column)
-                    new_cell.value = cell.value
                     copy_cell_style(cell, new_cell)
                 current_row += 1
+            t_write_total += time.time() - t0
+
+        total_elapsed = time.time() - t_total_start
+        print(f"处理耗时分析：拆分 {t_split_total:.1f}s, 合并 {t_merge_total:.1f}s, 写入 {t_write_total:.1f}s, 总计 {total_elapsed:.1f}s")
 
         # Copy column dimensions
         for col in source.column_dimensions:
@@ -773,9 +836,12 @@ def process_excel(config):
             result.row_dimensions[row].height = source.row_dimensions[row].height
 
         # Save the output file
+        print("处理完成，正在保存输出文件...")
         output_wb.save(output_path)
+        print("输出文件保存成功")
 
         # Verify output after save
+        print("正在验证输出结果...")
         output_errors = verify_output(config, source_headers)
         if output_errors:
             error_msg = "Output verification errors:\n" + "\n".join(f"  - {e}" for e in output_errors)
