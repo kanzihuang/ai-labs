@@ -17,7 +17,7 @@
 
 - `input.sheet.*.columns` 下的键值对表示处理过程中涉及到的列，键为列的标识，值为列的名称，查找列时通过列名称在表头中定位
 - `input.splitting_columns` 下的列表表示需要按比例拆分的列
-- 支付规则表(payment)定义了项目ID到支付账号的映射关系
+- 支付规则表(payment)定义了（公司/employer_name，费用所属中心/project_id）联合键到支付账号的映射关系，同时用于控制拆分行合并粒度和支付账号完整性校验
 - `keep_style`（默认 `true`）：设为 `false` 时跳过样式复制，写入速度可提升 45x 以上。适合不需要保留原格式的场景
 - `write_batch_size`（默认 `500`）：控制批量写入大小和进度输出频率。值越大内存占用稍多，但对写入速度影响很小
 
@@ -27,8 +27,8 @@ keep_style: true          # 是否保留原格式。false 可大幅提速
 write_batch_size: 500     # 写入批次大小，也用作进度输出间隔
 
 # 注意：payment_account 在 source.columns 中是可选的
-# - 如果配置了 payment 表，payment_account 可定义在 source.columns 中，程序会自动填充
-# - 如果未配置 payment 表，payment 整个段可以删除，也不要定义 payment_account
+# - 如果配置了 payment 表，则 source.columns 中必须包含 employer_name，程序会自动填充 payment_account
+# - 如果未配置 payment 表，payment 整个段可以删除，也不要定义 payment_account 和 employer_name
 input:
   path: "input/项目成本.xlsx"  # 输入文件路径
   sheet:
@@ -39,6 +39,7 @@ input:
         project_id: "费用所属中心"
         project_category: "费用类别"
         project_hours: "实际出勤"
+        employer_name: "公司"
         payment_account: "支付账号"  # 可选，仅在配置 payment 表时需要
     reference:
       name: "输入-工时表"  # 参考数据表名
@@ -50,6 +51,7 @@ input:
     payment:
       name: "输入-支付规则"  # 支付规则表（可选，不配置则不合并）
       columns:  # 支付规则列映射
+        employer_name: "公司"
         project_id: "费用所属中心"
         payment_account: "支付账号"
   splitting_columns:  # 需要拆分的列，重复条目会被检测并报错
@@ -77,7 +79,8 @@ output:
    - `output.sheet.result.name` — 结果表名称，不能为空
 
 2. **payment 表可选性**：
-   - payment 配置项是可选的；如果提供，必须包含有效的 `name`、`columns.project_id` 和 `columns.payment_account`
+   - payment 配置项是可选的；如果提供，必须包含有效的 `name`、`columns.employer_name`、`columns.project_id` 和 `columns.payment_account`
+   - 启用 payment 表时，`source.columns` 中也必须包含 `employer_name`
    - 如果 `source.columns` 中包含 `payment_account` 但未正确配置 payment 表，则报错退出
 
 3. **splitting_columns 去重**：
@@ -123,7 +126,8 @@ output:
 
 3. 支付规则表(payment)验证（可选）：
    - 仅在配置文件中存在`payment`配置时进行验证
-   - 如果配置了 payment 表，则必须包含`project_id`和`payment_account`列
+   - 如果配置了 payment 表，则必须包含`employer_name`、`project_id`和`payment_account`列
+   - 启用 payment 表时，`source.columns` 中也必须包含 `employer_name`
    - 如果未配置 payment 表，则不进行支付相关校验，拆分后不合并，结果表中不添加支付账号列
 
 ### 预检查（所有问题一次性报告）
@@ -131,10 +135,11 @@ output:
 | 检查项 | 规则 | 说明 |
 |--------|------|------|
 | 工时表唯一性 | 按`(employee_id, project_id)`联合检索无重复 | 同一员工同一项目的工时记录不能重复（每个重复对仅报告一次） |
-| 支付规则唯一性 | 按`project_id`无重复 | 每个项目只能有一个支付账号（每个重复 ID 仅报告一次） |
+| 支付规则唯一性 | 按`(employer_name, project_id)`联合键无重复 | 同一公司同一项目只能有一个支付账号（每个重复对仅报告一次） |
 | 支付账号完整性 | `project_id`非空时`payment_account`不能为空 | 每个有值的项目ID都必须有对应支付账号 |
-| 工时表项目覆盖 | `project_id`必须在支付规则表中存在（仅当配置了 payment 时检查） | 拆分后的项目ID来自工时表，必须能查到支付账号 |
-| 源表非拆分覆盖 | 无参考匹配的源行`project_id`必须在支付规则表中存在（仅当配置了 payment 时检查） | 未拆分的行保留原项目ID，必须能查到支付账号 |
+| 工时表项目覆盖 | `(employer_name, project_id)`必须在支付规则表中存在（仅当配置了 payment 时检查） | 拆分后的项目来自工时表，必须能查到支付账号 |
+| 源表非拆分覆盖 | 无参考匹配的源行`(employer_name, project_id)`必须在支付规则表中存在（仅当配置了 payment 时检查） | 未拆分的行保留原项目，必须能查到支付账号 |
+| 拆分覆盖 | 拆分后行的`(employer_name, reference_project_id)`必须在支付规则表中存在（仅当配置了 payment 时检查） | 拆分后取工时表项目对应的支付账号 |
 | 空 employee_id (参考表) | 参考表中 employee_id 不能为空 | 防止拆分时匹配失败 |
 | 空 employee_id (源表) | 源表中 employee_id 不能为空 | 防止拆分时匹配失败 |
 | 非数字工时 | 工时表的`project_hours`列必须为数字 | 非数字值无法计算拆分比例 |
@@ -186,7 +191,7 @@ output:
 2. 准备输入Excel文件，确保包含必要的sheet和列：
    - 源数据表（工资数据）
    - 参考数据表（工时数据）
-   - 支付规则表（项目与支付账号的对应关系）
+   - 支付规则表（公司+项目与支付账号的对应关系）
 3. 运行程序：
    ```bash
    python main.py [--config config.yaml]
@@ -279,11 +284,11 @@ deactivate
 | 张三 | AA   | 销售     | 3            | 4        |
 
 表payment:
-| 费用所属中心 | 支付账号  |
-|--------------|-----------|
-| 1            | Account1  |
-| 2            | Account2  |
-| 3            | Account3  |
+| 公司 | 费用所属中心 | 支付账号  |
+|------|--------------|-----------|
+| ABC  | 1            | Account1  |
+| ABC  | 2            | Account2  |
+| ABC  | 3            | Account3  |
 
 表result:
 | 姓名 | 工号 | 部门 | 基本工资 | 岗位工资 | 费用类别 | 费用所属中心 | 实际出勤 | 分管领导 | 支付账号  |
@@ -299,11 +304,11 @@ deactivate
 
 ```markdown
 表payment:
-| 费用所属中心 | 支付账号  |
-|--------------|-----------|
-| 1            | Account_X |
-| 2            | Account_X |
-| 3            | Account_Y |
+| 公司 | 费用所属中心 | 支付账号   |
+|------|--------------|-----------|
+| ABC  | 1            | Account_X |
+| ABC  | 2            | Account_X |
+| ABC  | 3            | Account_Y |
 
 表result:
 | 姓名 | 工号 | 部门 | 基本工资 | 岗位工资 | 费用类别 | 费用所属中心 | 实际出勤 | 分管领导 | 支付账号   |

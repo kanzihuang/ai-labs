@@ -31,7 +31,7 @@ The core splitting logic is in the `split_row()` function in [main.py](mdc:main.
 
 The `merge_rows_by_account()` function in [main.py](mdc:main.py) post-processes split results:
 
-1. Look up each row's `project_id` in the payment mapping to get `project_account`
+1. Look up each row's `(employer_name, project_id)` composite key in the payment mapping to get `project_account`
 2. Group rows by `(employee_id, project_account)`, preserving first-occurrence order
 3. For each group, produce one merged row:
    - `project_id`: comma-separated distinct values
@@ -55,9 +55,10 @@ Before processing, [main.py](mdc:main.py) validates:
 
 1. Required sheets and columns exist
 2. Reference table: no duplicate (employee_id, project_id) pairs
-3. Payment table: no duplicate project_id, no empty project_account
-4. Reference project_ids all exist in payment mapping
-5. Source non-split rows' project_ids exist in payment mapping
+3. Payment table: no duplicate (employer_name, project_id) pairs, no empty project_account
+4. Reference (employer_name, project_id) pairs all exist in payment mapping
+5. Source non-split rows' (employer_name, project_id) pairs exist in payment mapping
+6. Split-eligible rows' (employer_name, reference_project_id) pairs exist in payment mapping
 
 All validation errors are collected and reported together.
 
