@@ -10,7 +10,7 @@ import yaml
 from openpyxl import load_workbook
 from openpyxl.cell import Cell
 from openpyxl.utils.exceptions import InvalidFileException
-from copy import copy, deepcopy
+from copy import copy
 
 def load_config(config_path):
     """Load configuration from YAML file."""
@@ -77,7 +77,17 @@ def split_row(source_row, ref_by_employee, source_headers, reference_headers, co
         return [list(source_row)]
 
     # Split the row
-    remain_row = deepcopy(source_row)
+    # Track remaining values for each splitting column (avoid deepcopy of Cell objects)
+    remain_values = []
+    for j, cell in enumerate(source_row):
+        if cell.value is not None and cell.column in splitting_col_set:
+            try:
+                remain_values.append(float(cell.value))
+            except (ValueError, TypeError):
+                fatal(f"Error: 无法拆分'{source_headers[j]}:{source_row[j].value}'")
+        else:
+            remain_values.append(0.0)  # placeholder for non-splitting columns
+
     result_rows = []
     for i, ref_row in enumerate(matching_ref_rows):
         try:
@@ -94,11 +104,11 @@ def split_row(source_row, ref_by_employee, source_headers, reference_headers, co
             if cell.value is not None and cell.column in splitting_col_set:
                 # Split numeric values
                 try:
-                    if i < len(matching_ref_rows) - 1 :
+                    if i < len(matching_ref_rows) - 1:
                         new_cell.value = round(float(cell.value) * ratio, 2)
-                        remain_row[j].value -= new_cell.value
+                        remain_values[j] -= new_cell.value
                     else:
-                        new_cell.value = remain_row[j].value
+                        new_cell.value = remain_values[j]
                 except (ValueError, TypeError):
                     fatal(f"Error: 无法拆分'{source_headers[j]}:{source_row[j].value}'")
             new_row.append(new_cell)
@@ -176,8 +186,8 @@ def merge_rows_by_account(split_rows, source_headers, payment_mapping, config,
     for group_key, rows in groups.items():
         emp_id, proj_account = group_key
 
-        # Start with deep copy of first row
-        merged_row = deepcopy(rows[0])
+        # Start with shallow copy of first row (list of cells)
+        merged_row = list(rows[0])
 
         # Collect distinct project_ids and project_categories
         proj_ids = []
@@ -736,6 +746,8 @@ def process_excel(config):
         if result_sheet in output_wb.sheetnames:
             output_wb.remove(output_wb[result_sheet])
 
+        keep_style = config.get('keep_style', True)
+
         # Create new sheet
         result = output_wb.create_sheet(result_sheet)
 
@@ -743,7 +755,8 @@ def process_excel(config):
         for cell in source[1]:
             new_cell = result.cell(row=1, column=cell.column)
             new_cell.value = cell.value
-            copy_cell_style(cell, new_cell)
+            if keep_style:
+                copy_cell_style(cell, new_cell)
 
         # Ensure payment_account column exists in source_headers (only if payment is configured)
         if payment_configured:
@@ -818,9 +831,10 @@ def process_excel(config):
                 # Write values via append (fast bulk insertion)
                 result.append([cell.value for cell in result_row])
                 # Copy styles for this row
-                for cell in result_row:
-                    new_cell = result.cell(row=current_row, column=cell.column)
-                    copy_cell_style(cell, new_cell)
+                if keep_style:
+                    for cell in result_row:
+                        new_cell = result.cell(row=current_row, column=cell.column)
+                        copy_cell_style(cell, new_cell)
                 current_row += 1
             t_write_total += time.time() - t0
 

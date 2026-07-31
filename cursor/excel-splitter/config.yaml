@@ -1,3 +1,7 @@
+# 是否保留原格式（缺省 true。设为 false 可大幅提速，因为跳过逐单元格样式复制）
+keep_style: true
+# 每处理多少行输出一次进度（缺省 100，设为 1 则每行都输出）
+progress_interval: 100
 input:
   path: "input/项目成本.xlsx"  
   sheet:
@@ -26,8 +30,6 @@ input:
   splitting_columns:
   - 基本工资
   - 岗位工资
-# 每处理多少行输出一次进度（缺省 100，设为 1 则每行都输出）
-progress_interval: 100
 output:
   path: "output/项目成本拆分.xlsx"
   sheet:
