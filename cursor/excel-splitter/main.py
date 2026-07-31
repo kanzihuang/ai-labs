@@ -117,6 +117,7 @@ def split_row(source_row, ref_by_employee, source_headers, reference_headers, co
         if project_id_col and ref_project_id_col:
             new_row[project_id_col - 1].value = ref_row[ref_project_id_col - 1].value
 
+
         if project_category_col and ref_project_category_col:
             new_row[project_category_col - 1].value = ref_row[ref_project_category_col - 1].value
 
@@ -334,6 +335,7 @@ def validate_sheets(config, wb, payment_configured=True):
     payment_project_ids = set()
     ref_employee_ids = set()
     ref_projects_by_employee = {}  # employee_id -> set of project_ids (for composite key check)
+    ref_hours_by_employee = {}  # employee_id -> total_hours (to detect 0-hour rows)
     if payment_configured:
         # Check 2 & 3: Payment table - no duplicate (employer_name, project_id) + payment_account not empty
         seen_payment_pairs = set()
@@ -404,6 +406,16 @@ def validate_sheets(config, wb, payment_configured=True):
             if proj_id is not None and str(proj_id).strip() != '':
                 ref_projects_by_employee[emp_id].add(str(proj_id).strip())
 
+        # Track total hours per employee (for Check 11 zero-hour detection)
+        if emp_id is not None:
+            if emp_id not in ref_hours_by_employee:
+                ref_hours_by_employee[emp_id] = 0.0
+            if hours_val is not None:
+                try:
+                    ref_hours_by_employee[emp_id] += float(hours_val)
+                except (ValueError, TypeError):
+                    pass  # Non-numeric hours caught by Check 8
+
         # Check 1: duplicate (employee_id, project_id)
         if emp_id is not None and proj_id is not None:
             pair = (emp_id, proj_id)
@@ -447,7 +459,8 @@ def validate_sheets(config, wb, payment_configured=True):
     reported_empty_src_id = False
     src_id_types = set()
     source_missing_pairs = set() if payment_configured else None
-    src_employer_by_employee = {}  # employee_id -> employer_name for split-eligible rows
+    src_employers_by_employee = {}  # employee_id -> set(employer_names) for split-eligible rows
+    src_projects_by_employee = {}  # employee_id -> set(source_project_ids) for split-eligible rows
 
     if payment_configured:
         src_employer_name_col = get_column_index(source_headers,
@@ -469,10 +482,18 @@ def validate_sheets(config, wb, payment_configured=True):
         # Check 5: non-split rows must have payment mapping
         if payment_configured and source_project_id_col and src_employer_name_col:
             if emp_id in ref_employee_ids:
-                # Collect employer_name for composite key check (Check 11)
+                # Collect all employer_names and source project_ids for composite key check (Check 11)
                 employer_name = row[src_employer_name_col - 1].value
-                if employer_name is not None and str(employer_name).strip() != '':
-                    src_employer_by_employee[emp_id] = str(employer_name).strip()
+                employer_name_str = str(employer_name).strip() if employer_name is not None else ''
+                if emp_id not in src_employers_by_employee:
+                    src_employers_by_employee[emp_id] = set()
+                src_employers_by_employee[emp_id].add(employer_name_str)
+                # Also collect source project_id (used when total_ref_hours == 0, row not split)
+                proj_id = row[source_project_id_col - 1].value
+                if proj_id is not None and str(proj_id).strip() != '':
+                    if emp_id not in src_projects_by_employee:
+                        src_projects_by_employee[emp_id] = set()
+                    src_projects_by_employee[emp_id].add(str(proj_id).strip())
                 continue  # Will be split; source project_id replaced
             proj_id = row[source_project_id_col - 1].value
             employer_name = row[src_employer_name_col - 1].value
@@ -489,18 +510,25 @@ def validate_sheets(config, wb, payment_configured=True):
                          f"'{source_sheet}' has no matching record in sheet '{payment_sheet}'")
 
     # Check 11: Split-eligible rows - composite key (employer_name, project_id) must exist in payment
+    # Always check reference project_ids (used after split). Also check source project_ids
+    # for employees whose total reference hours is 0 (row passes through un-split).
     if payment_configured:
         split_missing_pairs = set()
-        for emp_id, employer_name in src_employer_by_employee.items():
+        for emp_id, employer_names in src_employers_by_employee.items():
             ref_projects = ref_projects_by_employee.get(emp_id, set())
-            for proj_id in ref_projects:
-                pair = (employer_name, proj_id)
-                if pair not in payment_mapping:
-                    split_missing_pairs.add((emp_id, employer_name, proj_id))
+            all_projects = set(ref_projects)
+            # If total reference hours is 0, the source project_id passes through un-split
+            if ref_hours_by_employee.get(emp_id, 0.0) == 0.0:
+                all_projects |= src_projects_by_employee.get(emp_id, set())
+            for employer_name in employer_names:
+                for proj_id in all_projects:
+                    pair = (employer_name, proj_id)
+                    if pair not in payment_mapping:
+                        split_missing_pairs.add((emp_id, employer_name, proj_id))
         for emp_id, employer_name, proj_id in sorted(split_missing_pairs):
             errors.append(f"employee_id='{emp_id}', employer_name='{employer_name}', "
-                         f"project_id='{proj_id}' (from sheet '{reference_sheet}') "
-                         f"has no matching record in sheet '{payment_sheet}'")
+                         f"project_id='{proj_id}' has no matching record "
+                         f"in sheet '{payment_sheet}'")
 
     # Check 10: employee_id type mismatch between sheets
     all_id_types = ref_id_types | src_id_types
