@@ -164,16 +164,15 @@ def merge_rows_by_account(split_rows, source_headers, payment_mapping, config,
         proj_id_str = str(proj_id).strip() if proj_id is not None else ''
         employer_name = row[employer_name_col - 1].value if employer_name_col else None
         employer_name_str = str(employer_name).strip() if employer_name is not None else ''
+        emp_id = row[employee_id_col - 1].value
 
         # Use composite key (employer_name, project_id) to look up payment_account
         lookup_key = (employer_name_str, proj_id_str)
         if lookup_key not in payment_mapping:
-            fatal(f"Error: (employer_name='{employer_name_str}', project_id='{proj_id_str}') "
-                  f"in split result has no matching payment account")
+            fatal(f"Error: employee_id='{emp_id}', employer_name='{employer_name_str}', "
+                  f"project_id='{proj_id_str}' has no matching payment account")
 
         proj_account = payment_mapping[lookup_key]
-        emp_id = row[employee_id_col - 1].value
-
         group_key = (emp_id, proj_account)
 
         if group_key in groups:
@@ -334,6 +333,7 @@ def validate_sheets(config, wb, payment_configured=True):
     # Build payment_mapping and payment_project_ids before reference/source scans
     payment_project_ids = set()
     ref_employee_ids = set()
+    ref_projects_by_employee = {}  # employee_id -> set of project_ids (for composite key check)
     if payment_configured:
         # Check 2 & 3: Payment table - no duplicate (employer_name, project_id) + payment_account not empty
         seen_payment_pairs = set()
@@ -357,7 +357,7 @@ def validate_sheets(config, wb, payment_configured=True):
             if pair in seen_payment_pairs:
                 if pair not in reported_duplicates:
                     errors.append(f"Duplicate (employer_name='{employer_name_str}', project_id='{proj_id_str}') "
-                                 f"found in payment sheet '{payment_sheet}'")
+                                 f"found in sheet '{payment_sheet}'")
                     reported_duplicates.add(pair)
                 continue
             seen_payment_pairs.add(pair)
@@ -396,9 +396,13 @@ def validate_sheets(config, wb, payment_configured=True):
         if emp_id is not None and not (isinstance(emp_id, str) and str(emp_id).strip() == ''):
             ref_id_types.add(type(emp_id).__name__)
 
-        # Build ref_employee_ids for Check 5 (source scan)
+        # Build ref_employee_ids and ref_projects_by_employee for source scan checks
         if payment_configured and emp_id is not None:
             ref_employee_ids.add(emp_id)
+            if emp_id not in ref_projects_by_employee:
+                ref_projects_by_employee[emp_id] = set()
+            if proj_id is not None and str(proj_id).strip() != '':
+                ref_projects_by_employee[emp_id].add(str(proj_id).strip())
 
         # Check 1: duplicate (employee_id, project_id)
         if emp_id is not None and proj_id is not None:
@@ -434,15 +438,16 @@ def validate_sheets(config, wb, payment_configured=True):
     if payment_configured and ref_missing_pids:
         for pid in sorted(ref_missing_pids):
             errors.append(f"project_id '{pid}' in reference sheet '{reference_sheet}' "
-                         f"has no matching record in payment sheet '{payment_sheet}'")
+                         f"has no matching record in sheet '{payment_sheet}'")
 
     # --- Consolidated single-pass scan of source sheet ---
-    # Checks 5, 7, and partial 10 (type collection)
+    # Checks 5, 7, partial 10 (type collection), and collect employer names for split rows
     src_employee_id_col = get_column_index(source_headers,
                                            config['input']['sheet']['source']['columns']['employee_id'])
     reported_empty_src_id = False
     src_id_types = set()
     source_missing_pairs = set() if payment_configured else None
+    src_employer_by_employee = {}  # employee_id -> employer_name for split-eligible rows
 
     if payment_configured:
         src_employer_name_col = get_column_index(source_headers,
@@ -464,6 +469,10 @@ def validate_sheets(config, wb, payment_configured=True):
         # Check 5: non-split rows must have payment mapping
         if payment_configured and source_project_id_col and src_employer_name_col:
             if emp_id in ref_employee_ids:
+                # Collect employer_name for composite key check (Check 11)
+                employer_name = row[src_employer_name_col - 1].value
+                if employer_name is not None and str(employer_name).strip() != '':
+                    src_employer_by_employee[emp_id] = str(employer_name).strip()
                 continue  # Will be split; source project_id replaced
             proj_id = row[source_project_id_col - 1].value
             employer_name = row[src_employer_name_col - 1].value
@@ -477,7 +486,21 @@ def validate_sheets(config, wb, payment_configured=True):
     if payment_configured and source_missing_pairs:
         for pair in sorted(source_missing_pairs):
             errors.append(f"(employer_name='{pair[0]}', project_id='{pair[1]}') in source sheet "
-                         f"'{source_sheet}' has no matching record in payment sheet '{payment_sheet}'")
+                         f"'{source_sheet}' has no matching record in sheet '{payment_sheet}'")
+
+    # Check 11: Split-eligible rows - composite key (employer_name, project_id) must exist in payment
+    if payment_configured:
+        split_missing_pairs = set()
+        for emp_id, employer_name in src_employer_by_employee.items():
+            ref_projects = ref_projects_by_employee.get(emp_id, set())
+            for proj_id in ref_projects:
+                pair = (employer_name, proj_id)
+                if pair not in payment_mapping:
+                    split_missing_pairs.add((emp_id, employer_name, proj_id))
+        for emp_id, employer_name, proj_id in sorted(split_missing_pairs):
+            errors.append(f"employee_id='{emp_id}', employer_name='{employer_name}', "
+                         f"project_id='{proj_id}' (from sheet '{reference_sheet}') "
+                         f"has no matching record in sheet '{payment_sheet}'")
 
     # Check 10: employee_id type mismatch between sheets
     all_id_types = ref_id_types | src_id_types
@@ -798,15 +821,15 @@ def process_excel(config):
         total_source_rows = source.max_row - 1  # Subtract header row
         total_reference_rows = len(reference_rows)
         print(f"开始处理数据，共 {total_source_rows} 行（参考表 {total_reference_rows} 行，{len(ref_by_employee)} 个员工）")
-        progress_interval = config.get('progress_interval', 100)
+        write_batch_size = config.get('write_batch_size', 500)
         row_counter = 0
+        all_result_rows = []  # Collect (values_list, cells_list) tuples, write later
         t_total_start = time.time()
         t_split_total = 0.0
         t_merge_total = 0.0
-        t_write_total = 0.0
         for row in source.iter_rows(min_row=2):
             row_counter += 1
-            if row_counter % progress_interval == 0 or row_counter == 1:
+            if row_counter % write_batch_size == 0 or row_counter == 1:
                 elapsed = time.time() - t_total_start
                 rate = row_counter / elapsed if elapsed > 0 else 0
                 eta = (total_source_rows - row_counter) / rate if rate > 0 else 0
@@ -826,20 +849,30 @@ def process_excel(config):
             else:
                 merged_rows = split_result_rows
 
-            t0 = time.time()
             for result_row in merged_rows:
-                # Write values via append (fast bulk insertion)
-                result.append([cell.value for cell in result_row])
-                # Copy styles for this row
-                if keep_style:
-                    for cell in result_row:
-                        new_cell = result.cell(row=current_row, column=cell.column)
-                        copy_cell_style(cell, new_cell)
-                current_row += 1
-            t_write_total += time.time() - t0
+                all_result_rows.append(result_row)
 
         total_elapsed = time.time() - t_total_start
-        print(f"处理耗时分析：拆分 {t_split_total:.1f}s, 合并 {t_merge_total:.1f}s, 写入 {t_write_total:.1f}s, 总计 {total_elapsed:.1f}s")
+        print(f"处理耗时分析：拆分 {t_split_total:.1f}s, 合并 {t_merge_total:.1f}s, 总计 {total_elapsed:.1f}s")
+
+        # Batch write to worksheet (avoids interleaving append/cell calls)
+        t_write_start = time.time()
+        current_row = 2
+        total_result_rows = len(all_result_rows)
+        for batch_start in range(0, total_result_rows, write_batch_size):
+            batch = all_result_rows[batch_start:batch_start + write_batch_size]
+            # Phase 1: append values
+            for result_row in batch:
+                result.append([cell.value for cell in result_row])
+            # Phase 2: copy styles
+            if keep_style:
+                for i, result_row in enumerate(batch):
+                    for cell in result_row:
+                        new_cell = result.cell(row=current_row + i, column=cell.column)
+                        copy_cell_style(cell, new_cell)
+            current_row += len(batch)
+        t_write_total = time.time() - t_write_start
+        print(f"写入耗时：{t_write_total:.1f}s (共 {total_result_rows} 行，批次大小 {write_batch_size})")
 
         # Copy column dimensions
         for col in source.column_dimensions:

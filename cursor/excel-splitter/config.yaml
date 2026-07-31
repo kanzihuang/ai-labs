@@ -1,7 +1,7 @@
 # 是否保留原格式（缺省 true。设为 false 可大幅提速，因为跳过逐单元格样式复制）
 keep_style: true
-# 每处理多少行输出一次进度（缺省 100，设为 1 则每行都输出）
-progress_interval: 100
+# 每次写入行数（缺省 500，值越大写入越快但内存占用越多。也用作进度输出间隔）
+write_batch_size: 2
 input:
   path: "input/项目成本.xlsx"  
   sheet:
