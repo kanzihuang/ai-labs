@@ -73,8 +73,16 @@ def split_row(source_row, ref_by_employee, source_headers, reference_headers, co
         total_ref_hours += ref_hours
 
     if total_ref_hours == 0:
-        # 如果总工时为0，直接复制原行
-        return [list(source_row)]
+        # 工时为0时，不拆分金额，但用 reference 的 project_id/project_category/project_hours 替换源表对应列
+        ref_row = matching_ref_rows[0]
+        result_row = list(source_row)
+        if project_id_col and ref_project_id_col:
+            result_row[project_id_col - 1].value = ref_row[ref_project_id_col - 1].value
+        if project_category_col and ref_project_category_col:
+            result_row[project_category_col - 1].value = ref_row[ref_project_category_col - 1].value
+        if project_hours_col and ref_project_hours_col:
+            result_row[project_hours_col - 1].value = ref_row[ref_project_hours_col - 1].value
+        return [result_row]
 
     # Split the row
     # Track remaining values for each splitting column (avoid deepcopy of Cell objects)
@@ -452,6 +460,15 @@ def validate_sheets(config, wb, payment_configured=True):
             errors.append(f"project_id '{pid}' in reference sheet '{reference_sheet}' "
                          f"has no matching record in sheet '{payment_sheet}'")
 
+    # Check 0h: Zero-hour employees must have at most one distinct project_id in reference
+    for emp_id, total_hours in ref_hours_by_employee.items():
+        if total_hours == 0.0:
+            projects = ref_projects_by_employee.get(emp_id, set())
+            if len(projects) > 1:
+                errors.append(f"employee_id='{emp_id}' has total hours=0 but multiple project_ids "
+                             f"in reference sheet '{reference_sheet}': {sorted(projects)}. "
+                             f"When hours are 0, only one project_id is allowed.")
+
     # --- Consolidated single-pass scan of source sheet ---
     # Checks 5, 7, partial 10 (type collection), and collect employer names for split rows
     src_employee_id_col = get_column_index(source_headers,
@@ -460,7 +477,6 @@ def validate_sheets(config, wb, payment_configured=True):
     src_id_types = set()
     source_missing_pairs = set() if payment_configured else None
     src_employers_by_employee = {}  # employee_id -> set(employer_names) for split-eligible rows
-    src_projects_by_employee = {}  # employee_id -> set(source_project_ids) for split-eligible rows
 
     if payment_configured:
         src_employer_name_col = get_column_index(source_headers,
@@ -482,19 +498,13 @@ def validate_sheets(config, wb, payment_configured=True):
         # Check 5: non-split rows must have payment mapping
         if payment_configured and source_project_id_col and src_employer_name_col:
             if emp_id in ref_employee_ids:
-                # Collect all employer_names and source project_ids for composite key check (Check 11)
+                # Collect all employer_names for composite key check (Check 11)
                 employer_name = row[src_employer_name_col - 1].value
                 employer_name_str = str(employer_name).strip() if employer_name is not None else ''
                 if emp_id not in src_employers_by_employee:
                     src_employers_by_employee[emp_id] = set()
                 src_employers_by_employee[emp_id].add(employer_name_str)
-                # Also collect source project_id (used when total_ref_hours == 0, row not split)
-                proj_id = row[source_project_id_col - 1].value
-                if proj_id is not None and str(proj_id).strip() != '':
-                    if emp_id not in src_projects_by_employee:
-                        src_projects_by_employee[emp_id] = set()
-                    src_projects_by_employee[emp_id].add(str(proj_id).strip())
-                continue  # Will be split; source project_id replaced
+                continue  # Will be split/replaced; source project_id replaced by reference
             proj_id = row[source_project_id_col - 1].value
             employer_name = row[src_employer_name_col - 1].value
             if proj_id is not None and str(proj_id).strip() != '' \
@@ -510,18 +520,14 @@ def validate_sheets(config, wb, payment_configured=True):
                          f"'{source_sheet}' has no matching record in sheet '{payment_sheet}'")
 
     # Check 11: Split-eligible rows - composite key (employer_name, project_id) must exist in payment
-    # Always check reference project_ids (used after split). Also check source project_ids
-    # for employees whose total reference hours is 0 (row passes through un-split).
+    # Reference project_ids are used after split (and also for zero-hour rows which now
+    # replace source project_id with reference project_id).
     if payment_configured:
         split_missing_pairs = set()
         for emp_id, employer_names in src_employers_by_employee.items():
             ref_projects = ref_projects_by_employee.get(emp_id, set())
-            all_projects = set(ref_projects)
-            # If total reference hours is 0, the source project_id passes through un-split
-            if ref_hours_by_employee.get(emp_id, 0.0) == 0.0:
-                all_projects |= src_projects_by_employee.get(emp_id, set())
             for employer_name in employer_names:
-                for proj_id in all_projects:
+                for proj_id in ref_projects:
                     pair = (employer_name, proj_id)
                     if pair not in payment_mapping:
                         split_missing_pairs.add((emp_id, employer_name, proj_id))
