@@ -23,16 +23,8 @@ def load_config(config_path):
 
 def copy_cell_style(source_cell, target_cell):
     """Copy cell style from source to target cell."""
-    if source_cell.has_style:
-        try:
-            target_cell.font = copy(source_cell.font)
-            target_cell.border = copy(source_cell.border)
-            target_cell.fill = copy(source_cell.fill)
-            target_cell.number_format = source_cell.number_format
-            target_cell.alignment = copy(source_cell.alignment)
-            target_cell.protection = copy(source_cell.protection)
-        except (IndexError, AttributeError):
-            pass
+    if source_cell.has_style and source_cell._style is not None:
+        target_cell._style = source_cell._style
 
 def get_column_index(headers, column_name):
     """Get column index (1-based) for a given column name."""
@@ -893,20 +885,18 @@ def process_excel(config):
         total_elapsed = time.time() - t_total_start
         print(f"处理耗时分析：拆分 {t_split_total:.1f}s, 合并 {t_merge_total:.1f}s, 总计 {total_elapsed:.1f}s")
 
-        # Batch write to worksheet (avoids interleaving append/cell calls)
+        # Batch write to worksheet
         t_write_start = time.time()
         current_row = 2
         total_result_rows = len(all_result_rows)
         for batch_start in range(0, total_result_rows, write_batch_size):
             batch = all_result_rows[batch_start:batch_start + write_batch_size]
-            # Phase 1: append values
-            for result_row in batch:
-                result.append([cell.value for cell in result_row])
-            # Phase 2: copy styles
-            if keep_style:
-                for i, result_row in enumerate(batch):
-                    for cell in result_row:
-                        new_cell = result.cell(row=current_row + i, column=cell.column)
+            for i, result_row in enumerate(batch):
+                row_num = current_row + i
+                for cell in result_row:
+                    new_cell = result.cell(row=row_num, column=cell.column)
+                    new_cell.value = cell.value
+                    if keep_style:
                         copy_cell_style(cell, new_cell)
             current_row += len(batch)
         t_write_total = time.time() - t_write_start
