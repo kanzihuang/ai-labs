@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import argparse
+import math
 import os
 import sys
 import time
@@ -113,10 +114,15 @@ def split_row(source_row, ref_by_employee, source_headers, reference_headers, co
                 # Split numeric values
                 try:
                     if i < len(matching_ref_rows) - 1:
-                        new_cell.value = round(float(cell.value) * ratio, 2)
+                        proportional = float(cell.value) * ratio
+                        # 向零取整：正数向下、负数向上，确保余数不反号
+                        if proportional >= 0:
+                            new_cell.value = math.floor(proportional * 100) / 100
+                        else:
+                            new_cell.value = math.ceil(proportional * 100) / 100
                         remain_values[j] -= new_cell.value
                     else:
-                        new_cell.value = remain_values[j]
+                        new_cell.value = round(remain_values[j], 2)
                 except (ValueError, TypeError):
                     fatal(f"Error: 无法拆分'{source_headers[j]}:{source_row[j].value}'")
             new_row.append(new_cell)
@@ -594,7 +600,7 @@ def verify_output(config, source_headers):
         if all(cell.value is None for cell in row):
             errors.append(f"Empty row {i} in result sheet '{result_sheet_name}'")
 
-    # Check splitting columns: numeric, non-negative in result
+    # Check splitting columns: numeric in result
     # Precompute column indices for all splitting columns
     result_col_map_verify = {}
     for col_name in splitting_columns:
@@ -604,15 +610,13 @@ def verify_output(config, source_headers):
         else:
             result_col_map_verify[col_name] = col_idx
 
-    # Single pass through result: validate numeric/non-negative for all splitting columns
+    # Single pass through result: validate numeric for all splitting columns
     for i, row in enumerate(result.iter_rows(min_row=2), start=2):
         for col_name, col_idx in result_col_map_verify.items():
             val = row[col_idx - 1].value
             if val is not None:
                 try:
-                    fval = float(val)
-                    if fval < -0.001:  # Small tolerance for rounding
-                        errors.append(f"Negative value {fval} in '{col_name}' at result row {i}")
+                    float(val)
                 except (ValueError, TypeError):
                     errors.append(f"Non-numeric value '{val}' in '{col_name}' at result row {i}")
 
