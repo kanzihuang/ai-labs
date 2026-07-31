@@ -18,8 +18,14 @@
 - `input.sheet.*.columns` 下的键值对表示处理过程中涉及到的列，键为列的标识，值为列的名称，查找列时通过列名称在表头中定位
 - `input.splitting_columns` 下的列表表示需要按比例拆分的列
 - 支付规则表(payment)定义了项目ID到支付账号的映射关系
+- `keep_style`（默认 `true`）：设为 `false` 时跳过样式复制，写入速度可提升 45x 以上。适合不需要保留原格式的场景
+- `write_batch_size`（默认 `500`）：控制批量写入大小和进度输出频率。值越大内存占用稍多，但对写入速度影响很小
 
 ```yaml
+# 性能选项（可选，均有默认值）
+keep_style: true          # 是否保留原格式。false 可大幅提速
+write_batch_size: 500     # 写入批次大小，也用作进度输出间隔
+
 # 注意：payment_account 在 source.columns 中是可选的
 # - 如果配置了 payment 表，payment_account 可定义在 source.columns 中，程序会自动填充
 # - 如果未配置 payment 表，payment 整个段可以删除，也不要定义 payment_account
