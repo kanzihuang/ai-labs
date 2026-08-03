@@ -1,34 +1,37 @@
 # Excel Splitter
 
-一个用于拆分Excel表格中工资数据的工具，根据工时表对工资进行按比例拆分，再按支付账号合并。
+一个用于拆分Excel表格中工资数据的工具，根据工时表对工资进行按比例拆分，可选按支付账号合并。
 
 ## 功能说明
 
 该工具用于处理工资数据，主要功能包括：
 
 1. 根据工时表对工资进行按比例拆分
-2. 根据支付规则表将拆分结果按支付账号合并
-3. 保持源表格的格式和样式
-4. 支持自定义配置的列映射和拆分规则
+2. 根据支付规则表为每行填充支付账号
+3. 可选按支付账号合并同一员工的行（通过 `merge_by_payment_account` 配置）
+4. 保持源表格的格式和样式
+5. 支持自定义配置的列映射和拆分规则
 
 ## 配置说明
 
 配置文件采用YAML格式，默认文件名为`config.yaml`。配置项说明如下：
 
+- `merge_by_payment_account`（默认 `false`）：设为 `true` 时将同一员工同一支付账号的拆分行合并为一行
 - `input.sheet.*.columns` 下的键值对表示处理过程中涉及到的列，键为列的标识，值为列的名称，查找列时通过列名称在表头中定位
 - `input.splitting_columns` 下的列表表示需要按比例拆分的列
-- 支付规则表(payment)定义了（公司/employer_name，费用所属中心/project_id）联合键到支付账号的映射关系，同时用于控制拆分行合并粒度和支付账号完整性校验
+- 支付规则表(payment)定义了（公司/employer_name，费用所属中心/project_id）联合键到支付账号的映射关系，为**必需配置**，用于填充每行的支付账号
 - `keep_style`（默认 `true`）：设为 `false` 时跳过样式复制，写入速度可提升 45x 以上。适合不需要保留原格式的场景
 - `write_batch_size`（默认 `500`）：控制批量写入大小和进度输出频率。值越大内存占用稍多，但对写入速度影响很小
 
 ```yaml
+# 合并选项（默认 false，即不合并）
+merge_by_payment_account: false
+
 # 性能选项（可选，均有默认值）
 keep_style: true          # 是否保留原格式。false 可大幅提速
 write_batch_size: 500     # 写入批次大小，也用作进度输出间隔
 
-# 注意：payment_account 在 source.columns 中是可选的
-# - 如果配置了 payment 表，则 source.columns 中必须包含 employer_name，程序会自动填充 payment_account
-# - 如果未配置 payment 表，payment 整个段可以删除，也不要定义 payment_account 和 employer_name
+# 注意：payment 表为必需配置，source.columns 中必须包含 employer_name 和 payment_account
 input:
   path: "input/项目成本.xlsx"  # 输入文件路径
   sheet:
@@ -40,7 +43,7 @@ input:
         project_category: "费用类别"
         project_hours: "实际出勤"
         employer_name: "公司"
-        payment_account: "支付账号"  # 可选，仅在配置 payment 表时需要
+        payment_account: "支付账号"
     reference:
       name: "输入-工时表"  # 参考数据表名
       columns:  # 参考数据列映射
@@ -49,7 +52,7 @@ input:
         project_category: "费用类别"
         project_hours: "实际出勤"
     payment:
-      name: "输入-支付规则"  # 支付规则表（可选，不配置则不合并）
+      name: "输入-支付规则"  # 支付规则表（必需）
       columns:  # 支付规则列映射
         employer_name: "公司"
         project_id: "费用所属中心"
@@ -78,12 +81,16 @@ output:
    - `output.path` — 输出文件路径，不能为空
    - `output.sheet.result.name` — 结果表名称，不能为空
 
-2. **payment 表可选性**：
-   - payment 配置项是可选的；如果提供，必须包含有效的 `name`、`columns.employer_name`、`columns.project_id` 和 `columns.payment_account`
-   - 启用 payment 表时，`source.columns` 中也必须包含 `employer_name`
-   - 如果 `source.columns` 中包含 `payment_account` 但未正确配置 payment 表，则报错退出
+2. **payment 表必需性**：
+   - payment 配置项为必需；必须包含有效的 `name`、`columns.employer_name`、`columns.project_id` 和 `columns.payment_account`
+   - `source.columns` 中也必须包含 `employer_name` 和 `payment_account`
+   - 缺少 payment 配置或配置不完整则报错退出
 
-3. **splitting_columns 去重**：
+3. **merge_by_payment_account**：
+   - 可选配置，默认为 `false`（不合并）
+   - 设为 `true` 时，同一员工同一支付账号的拆分行将合并为一行
+
+4. **splitting_columns 去重**：
    - 检测 `splitting_columns` 中的重复条目并报错
    - 合并阶段也会自动去重，防止重复计算
 
@@ -92,11 +99,12 @@ output:
 ## 数据处理流程
 
 1. **配置验证** — 调用 `validate_config()` 验证配置文件结构和类型
-2. **基础验证** — 验证输入文件、必需 sheet 和列是否存在（payment 表为可选）
+2. **基础验证** — 验证输入文件、必需 sheet 和列是否存在（payment 表为必需）
 3. **预检查** — 一次性收集所有数据质量问题（详见[数据验证规则]）
 4. **拆分** — 根据工时表按比例拆分工资数据
-5. **合并** — 如果配置了 payment 表，将同一员工同一支付账号的拆分行合并
-6. **输出验证** — 保存后调用 `verify_output()` 验证输出文件完整性
+5. **填充支付账号** — 为每行根据 `(employer_name, project_id)` 查找并填充 `payment_account`
+6. **合并** — 如果 `merge_by_payment_account: true`，将同一员工同一支付账号的拆分行合并
+7. **输出验证** — 保存后调用 `verify_output()` 验证输出文件完整性
 
 ## 输出验证
 
@@ -124,11 +132,10 @@ output:
    - 必须包含`project_category`列
    - 必须包含`project_hours`列
 
-3. 支付规则表(payment)验证（可选）：
-   - 仅在配置文件中存在`payment`配置时进行验证
-   - 如果配置了 payment 表，则必须包含`employer_name`、`project_id`和`payment_account`列
-   - 启用 payment 表时，`source.columns` 中也必须包含 `employer_name`
-   - 如果未配置 payment 表，则不进行支付相关校验，拆分后不合并，结果表中不添加支付账号列
+3. 支付规则表(payment)验证（必需）：
+   - payment 配置为必需项，必须包含`employer_name`、`project_id`和`payment_account`列
+   - `source.columns` 中也必须包含 `employer_name` 和 `payment_account`
+   - 程序会为每行填充支付账号，结果表中始终包含支付账号列
 
 ### 预检查（所有问题一次性报告）
 
@@ -137,9 +144,9 @@ output:
 | 工时表唯一性 | 按`(employee_id, project_id)`联合检索无重复 | 同一员工同一项目的工时记录不能重复（每个重复对仅报告一次） |
 | 支付规则唯一性 | 按`(employer_name, project_id)`联合键无重复 | 同一公司同一项目只能有一个支付账号（每个重复对仅报告一次） |
 | 支付账号完整性 | `project_id`非空时`payment_account`不能为空 | 每个有值的项目ID都必须有对应支付账号 |
-| 工时表项目覆盖 | `(employer_name, project_id)`必须在支付规则表中存在（仅当配置了 payment 时检查） | 拆分后的项目来自工时表，必须能查到支付账号 |
-| 源表非拆分覆盖 | 无参考匹配的源行`(employer_name, project_id)`必须在支付规则表中存在（仅当配置了 payment 时检查） | 未拆分的行保留原项目，必须能查到支付账号 |
-| 拆分覆盖 | 拆分后行的`(employer_name, reference_project_id)`必须在支付规则表中存在（仅当配置了 payment 时检查） | 拆分后取工时表项目对应的支付账号 |
+| 工时表项目覆盖 | `(employer_name, project_id)`必须在支付规则表中存在 | 拆分后的项目来自工时表，必须能查到支付账号 |
+| 源表非拆分覆盖 | 无参考匹配的源行`(employer_name, project_id)`必须在支付规则表中存在 | 未拆分的行保留原项目，必须能查到支付账号 |
+| 拆分覆盖 | 拆分后行的`(employer_name, reference_project_id)`必须在支付规则表中存在 | 拆分后取工时表项目对应的支付账号 |
 | 空 employee_id (参考表) | 参考表中 employee_id 不能为空 | 防止拆分时匹配失败 |
 | 空 employee_id (源表) | 源表中 employee_id 不能为空 | 防止拆分时匹配失败 |
 | 非数字工时 | 工时表的`project_hours`列必须为数字 | 非数字值无法计算拆分比例 |
@@ -163,9 +170,9 @@ output:
 
 ## 合并规则
 
-合并仅在配置了支付规则表（payment）时执行。如果未配置 payment 表，拆分后的行直接输出，不合并，结果表中也不添加支付账号列。
+合并仅在 `merge_by_payment_account: true` 时执行。无论是否合并，每行都会填充支付账号。
 
-拆分完成后，按支付账号对结果行进行合并：
+当启用合并时，拆分完成后按支付账号对结果行进行合并：
 
 1. **合并键**：`employee_id + payment_account`
    - 同一员工、同一支付账号的拆分行合并为一行
@@ -181,9 +188,11 @@ output:
 | `project_id` | 逗号分隔的去重值，按出现顺序 |
 | `project_category` | 逗号分隔的去重值，按出现顺序 |
 | `project_hours` | 求和 |
-| `payment_account` | 从支付规则表获取 |
+| `payment_account` | 已在填充阶段设置，保持不变 |
 | 拆分列（splitting_columns） | 求和 |
 | 其他列 | 保持不变（同一员工值相同） |
+
+当不合并时（默认），每行保留独立的 `project_id`，`payment_account` 根据该行的 `(employer_name, project_id)` 填充。
 
 ## 使用说明
 
@@ -329,7 +338,7 @@ python3 -m unittest test_excel_splitter.py -v
 2. 输入文件必须符合数据验证规则，所有问题会一次性报告
 3. 拆分比例基于参考表中的总工时计算
 4. 支付账号合并仅在单个源行拆分结果内进行
-5. 如果配置了支付规则表（payment）且源数据表中没有`支付账号`列，程序会自动在结果表中添加该列
+5. 支付规则表（payment）为必需配置，程序会自动在结果表中添加支付账号列（如果源表中没有）
 
 ## 项目结构
 
