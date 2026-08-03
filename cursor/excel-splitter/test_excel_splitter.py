@@ -10,6 +10,7 @@ class TestExcelSplitter(unittest.TestCase):
     def setUp(self):
         # Create test configuration
         self.config = {
+            'merge_by_payment_account': True,
             'input': {
                 'path': 'test_input.xlsx',
                 'sheet': {
@@ -612,7 +613,7 @@ class TestExcelSplitter(unittest.TestCase):
         """Valid config should pass validate_config without error."""
         from main import validate_config
         config = self._make_minimal_config()
-        self.assertTrue(validate_config(config))
+        self.assertFalse(validate_config(config))  # merge_by_payment_account defaults to False
 
     def test_config_missing_input_section(self):
         """Config missing 'input' key -> SystemExit."""
@@ -832,11 +833,12 @@ class TestExcelSplitter(unittest.TestCase):
         self.assertIn('工时', wb.sheetnames)
         wb.close()
 
-    # --- Payment-optional integration test ---
+    # --- merge_by_payment_account integration test ---
 
-    def test_split_without_payment_config(self):
-        """Config without payment section: splits correctly, no merge, no payment_account column."""
+    def test_split_without_merge(self):
+        """merge_by_payment_account=False (default): splits correctly, payment_account populated, no merge."""
         config = {
+            'merge_by_payment_account': False,
             'input': {
                 'path': 'test_input.xlsx',
                 'sheet': {
@@ -846,7 +848,9 @@ class TestExcelSplitter(unittest.TestCase):
                             'employee_id': '工号',
                             'project_id': '费用所属中心',
                             'project_category': '费用类别',
-                            'project_hours': '实际出勤'
+                            'project_hours': '实际出勤',
+                            'payment_account': '支付账号',
+                            'employer_name': '工资所属单位'
                         }
                     },
                     'reference': {
@@ -856,6 +860,14 @@ class TestExcelSplitter(unittest.TestCase):
                             'project_id': '费用所属中心',
                             'project_category': '费用类别',
                             'project_hours': '实际出勤'
+                        }
+                    },
+                    'payment': {
+                        'name': '支付规则',
+                        'columns': {
+                            'project_id': '费用所属中心',
+                            'payment_account': '支付账号',
+                            'employer_name': '公司'
                         }
                     }
                 },
@@ -880,7 +892,12 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(['张三', 'AA', '研发', '1', 2])
         self.reference_sheet.append(['张三', 'AA', '研发', '2', 3])
 
-        # No payment sheet needed
+        payment_headers = ['费用所属中心', '支付账号', '公司']
+        self.payment_sheet.append(payment_headers)
+        self.payment_sheet.append(['1', 'Account_1', '公司A'])
+        self.payment_sheet.append(['2', 'Account_2', '公司A'])
+        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+
         self.wb.save('test_input.xlsx')
         process_excel(config)
 
@@ -891,12 +908,12 @@ class TestExcelSplitter(unittest.TestCase):
         result_rows = list(result_sheet.iter_rows(min_row=2))
         self.assertEqual(len(result_rows), 2)
 
-        # Headers should NOT include payment_account
+        # Headers should include payment_account
         result_headers = [cell.value for cell in result_sheet[1]]
-        self.assertEqual(result_headers, source_headers)
-        self.assertNotIn('支付账号', result_headers)
+        expected_headers = source_headers + ['支付账号']
+        self.assertEqual(result_headers, expected_headers)
 
-        # Verify split values
+        # Verify split values and payment_account populated
         row1 = [cell.value for cell in result_rows[0]]
         row2 = [cell.value for cell in result_rows[1]]
         # Total 基本工资 = 1000, split 2/5 and 3/5
@@ -905,6 +922,9 @@ class TestExcelSplitter(unittest.TestCase):
         # Total 岗位工资 = 3000, split 2/5 and 3/5
         self.assertAlmostEqual(row1[4], 1200.00, places=1)
         self.assertAlmostEqual(row2[4], 1800.00, places=1)
+        # Each row has its own payment_account
+        self.assertEqual(row1[10], 'Account_1')
+        self.assertEqual(row2[10], 'Account_2')
 
     # --- Composite key (employer_name, project_id) tests ---
 
