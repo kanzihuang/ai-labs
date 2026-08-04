@@ -446,6 +446,9 @@ def validate_sheets(config, wb):
     source_headers = [cell.value for cell in source[1]]
     reference_headers = [cell.value for cell in reference[1]]
 
+    # Collect all errors first, report them together at the end
+    errors = []
+
     # Payment sheet is required
     payment_sheet = config['input']['sheet']['payment']['name']
     if payment_sheet not in wb.sheetnames:
@@ -520,9 +523,6 @@ def validate_sheets(config, wb):
             fatal(f"Error: Required column '{col_name}' not found in payment sheet")
 
     # --- Pre-processing data validation ---
-    # Collect all errors first, report them together at the end
-    errors = []
-
     ref_employee_id_col = get_column_index(reference_headers,
                                            config['input']['sheet']['reference']['columns']['employee_id'])
     ref_project_id_col = get_column_index(reference_headers,
