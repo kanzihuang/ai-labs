@@ -1293,8 +1293,8 @@ class TestExcelSplitter(unittest.TestCase):
         # Unsplit row: computed column keeps original source value (9999), not recomputed
         self.assertEqual(row[5], 9999.00)
 
-    def test_computed_new_column_appended(self):
-        """Computed column not in source headers → appended to result."""
+    def test_computed_column_not_in_source_fatal(self):
+        """Computed column not in source headers → fatal."""
         # Source has no 福利前工资合计 column
         source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资',
                           '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
@@ -1313,20 +1313,8 @@ class TestExcelSplitter(unittest.TestCase):
 
         self.wb.save('test_input.xlsx')
         config = self._make_computed_config()
-        process_excel(config)
-
-        output_wb = load_workbook('test_output.xlsx')
-        result_sheet = output_wb['工资拆分']
-        result_headers = [cell.value for cell in result_sheet[1]]
-
-        # 福利前工资合计 should be appended as new column
-        self.assertIn('支付账号', result_headers)
-        self.assertIn('福利前工资合计', result_headers)
-
-        result_row = [cell.value for cell in result_sheet[2]]
-        # 基本工资=1000, 岗位工资=3000 → 福利前=4000
-        qf_idx = result_headers.index('福利前工资合计')
-        self.assertAlmostEqual(result_row[qf_idx], 4000.00, places=1)
+        with self.assertRaises(SystemExit):
+            process_excel(config)
 
     # --- Computed column validation error tests ---
 

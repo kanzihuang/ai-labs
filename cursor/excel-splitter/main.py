@@ -476,7 +476,7 @@ def validate_sheets(config, wb):
             formula = computed_columns_cfg[name]
             # Check computed column name exists in source headers
             if name not in source_headers:
-                pass  # Will be appended to result headers in process_excel
+                errors.append(f"计算列 '{name}' 不存在于源表中")
             # Parse formula and validate references
             try:
                 tokens = tokenize_formula(formula, known)
@@ -1049,15 +1049,6 @@ def process_excel(config):
             header_cell.value = payment_account_name
             source_headers.append(payment_account_name)
 
-        # Ensure computed column headers exist (append if not in source)
-        computed_columns_cfg = config.get('input', {}).get('computed_columns', {})
-        for cc_name in computed_columns_cfg:
-            if get_column_index(source_headers, cc_name) is None:
-                new_col = len(source_headers) + 1
-                header_cell = result.cell(row=1, column=new_col)
-                header_cell.value = cc_name
-                source_headers.append(cc_name)
-
         # Precompute column name -> index maps for O(1) lookups (after source_headers is finalized)
         source_col_map = {name: idx + 1 for idx, name in enumerate(source_headers)}
         ref_col_map = {name: idx + 1 for idx, name in enumerate(reference_headers)}
@@ -1074,6 +1065,7 @@ def process_excel(config):
                     splitting_col_list.append(idx)
 
         # Pre-parse computed column formulas
+        computed_columns_cfg = config.get('input', {}).get('computed_columns', {})
         computed_asts = []  # list of (name, ast, col_index)
         if computed_columns_cfg:
             known_for_parse = set(source_headers)
