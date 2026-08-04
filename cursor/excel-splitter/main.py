@@ -1163,6 +1163,7 @@ def process_excel(config):
         print(f"处理耗时分析：拆分 {t_split_total:.1f}s, 合并 {t_merge_total:.1f}s, 总计 {total_elapsed:.1f}s")
 
         # Compute formulas for split rows
+        computed_errors = []
         if computed_asts and rows_to_compute:
             t_compute_start = time.time()
             max_cols = len(source_headers)
@@ -1199,8 +1200,10 @@ def process_excel(config):
             print(f"计算列耗时：{t_compute_total:.1f}s (共 {len(rows_to_compute)} 行)")
 
             # Per-source-row verification: sum of computed columns across split rows
-            # must equal the source row's original value
+            # must equal the source row's original value.
+            # Collect all mismatches first, then report after file is saved.
             src_employee_id_name = config['input']['sheet']['source']['columns']['employee_id']
+            computed_errors = []
             for src_row, result_indices in src_row_groups:
                 emp_id = src_row[source_col_map[src_employee_id_name] - 1].value
                 for cc_name, _ast, cc_idx in computed_asts:
@@ -1224,8 +1227,8 @@ def process_excel(config):
                             except (ValueError, TypeError):
                                 pass
                     if abs(result_sum - src_val_f) > 0.001:
-                        fatal(
-                            f"Error: 计算列 '{cc_name}' 源行 employee_id='{emp_id}' "
+                        computed_errors.append(
+                            f"计算列 '{cc_name}' 源行 employee_id='{emp_id}' "
                             f"拆分结果合计 ({result_sum:.2f}) 与源行值 ({src_val_f:.2f}) 不一致"
                         )
 
@@ -1258,6 +1261,11 @@ def process_excel(config):
         print("处理完成，正在保存输出文件...")
         output_wb.save(output_path)
         print("输出文件保存成功")
+
+        # Report computed column verification errors (if any)
+        if computed_errors:
+            error_msg = "计算列校验错误（公式结果与源表不一致）:\n" + "\n".join(f"  - {e}" for e in computed_errors)
+            fatal(error_msg)
 
         # Verify output after save
         print("正在验证输出结果...")
