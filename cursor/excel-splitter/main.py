@@ -49,7 +49,8 @@ def tokenize_formula(formula, known_names):
     """
     # Build alternation pattern: longest names first so they match before substrings
     if known_names:
-        escaped = [re.escape(n) for n in sorted(known_names, key=len, reverse=True)]
+        str_names = [str(n) for n in known_names]
+        escaped = [re.escape(n) for n in sorted(str_names, key=len, reverse=True)]
         name_pattern = '|'.join(escaped)
         pattern = re.compile(r'(?:' + name_pattern + r')|(?:\d+(?:\.\d+)?)')
     else:
