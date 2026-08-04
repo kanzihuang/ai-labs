@@ -486,13 +486,13 @@ def validate_sheets(config, wb):
             formula = computed_columns_cfg[name]
             # Check computed column name exists in source headers
             if name not in source_headers:
-                errors.append(f"计算列 '{name}' 不存在于源表中")
+                errors.append(f"计算列 '{name}' 不存在于源表 '{source_sheet}' 中")
             # Parse formula and validate references
             try:
                 tokens = tokenize_formula(formula, known)
                 ast = parse_formula(tokens)
             except FormulaError as e:
-                errors.append(f"计算列 '{name}' 的公式无效: {e}")
+                errors.append(f"计算列 '{name}' (源表 '{source_sheet}') 的公式无效: {e}")
                 continue
             # Check all referenced columns: must be in splitting_columns or an earlier computed column
             for ref in collect_refs(ast):
@@ -506,7 +506,7 @@ def validate_sheets(config, wb):
                     )
                 else:
                     errors.append(
-                        f"计算列 '{name}' 公式中引用的 '{ref}' 不存在于源表列中"
+                        f"计算列 '{name}' 公式中引用的 '{ref}' 不存在于源表 '{source_sheet}' 中"
                     )
 
     # Validate required columns in reference sheet
