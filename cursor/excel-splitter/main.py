@@ -492,7 +492,7 @@ def validate_sheets(config, wb):
                 tokens = tokenize_formula(formula, known)
                 ast = parse_formula(tokens)
             except FormulaError as e:
-                errors.append(f"计算列 '{name}' (源表 '{source_sheet}') 的公式无效: {e}")
+                errors.append(f"计算列 '{name}' 的公式无效（源表 '{source_sheet}'）: {e}")
                 continue
             # Check all referenced columns: must be in splitting_columns or an earlier computed column
             for ref in collect_refs(ast):
