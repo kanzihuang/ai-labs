@@ -1460,7 +1460,7 @@ class TestExcelSplitter(unittest.TestCase):
             process_excel(config)
 
     def test_verify_computed_source_row_mismatch(self):
-        """Per-source-row sum mismatch is caught."""
+        """Per-source-row sum mismatch is fatal."""
         source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '福利前工资合计',
                           '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
         self.source_sheet.append(source_headers)
@@ -1480,7 +1480,6 @@ class TestExcelSplitter(unittest.TestCase):
 
         self.wb.save('test_input.xlsx')
         # Re-open and modify the saved file so source value doesn't match computed sum
-        # source 福利前 = 5000, but computed sum = 800 + 3200 = 4000
         wb2 = load_workbook('test_input.xlsx')
         wb2['工资']['F2'] = 5000.00
         wb2.save('test_input.xlsx')
