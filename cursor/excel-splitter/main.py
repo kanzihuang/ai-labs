@@ -58,27 +58,34 @@ def tokenize_formula(formula, known_names):
 
     tokens = []
     pos = 0
-    for m in pattern.finditer(formula):
-        gap = formula[pos:m.start()]
-        for ch in gap:
+
+    def scan_gap(text):
+        """Scan a gap between regex matches, collecting operators and reporting unknown words."""
+        i = 0
+        while i < len(text):
+            ch = text[i]
             if ch.isspace():
+                i += 1
                 continue
             if ch in '+-*/()':
                 tokens.append(ch)
-            else:
-                raise FormulaError(f"无法识别的字符 '{ch}'")
+                i += 1
+                continue
+            # Collect consecutive non-operator chars as unknown word
+            j = i
+            while j < len(text) and not text[j].isspace() and text[j] not in '+-*/()':
+                j += 1
+            word = text[i:j]
+            raise FormulaError(f"无法识别的列名 '{word}'")
+
+    for m in pattern.finditer(formula):
+        gap = formula[pos:m.start()]
+        scan_gap(gap)
         tokens.append(m.group(0))
         pos = m.end()
 
     # Process trailing characters
-    tail = formula[pos:]
-    for ch in tail:
-        if ch.isspace():
-            continue
-        if ch in '+-*/()':
-            tokens.append(ch)
-        else:
-            raise FormulaError(f"无法识别的字符 '{ch}'")
+    scan_gap(formula[pos:])
 
     return tokens
 
