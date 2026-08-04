@@ -32,6 +32,12 @@ input:
   splitting_columns:
   - 基本工资
   - 岗位工资
+  - 用餐补助
+  - 差旅补助
+  computed_columns:
+    福利前工资合计: "基本工资 + 岗位工资"
+    税前应发工资总额(不含差补): "福利前工资合计 + 用餐补助"
+    实发工资: "税前应发工资总额(不含差补) + 差旅补助"
 output:
   path: "output/项目成本拆分.xlsx"
   sheet:

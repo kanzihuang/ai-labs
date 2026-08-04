@@ -33,6 +33,173 @@ def get_column_index(headers, column_name):
     except ValueError:
         return None
 
+import re
+
+
+class FormulaError(Exception):
+    """Raised when a formula is invalid or evaluation fails."""
+    pass
+
+
+def tokenize_formula(formula, known_names):
+    """Tokenize a formula string into tokens (column names, operators, numbers, parens).
+
+    Uses longest-match regex against known_names so column names containing
+    parentheses (e.g. 税前应发工资总额(不含差补)) are matched as single tokens.
+    """
+    # Build alternation pattern: longest names first so they match before substrings
+    if known_names:
+        escaped = [re.escape(n) for n in sorted(known_names, key=len, reverse=True)]
+        name_pattern = '|'.join(escaped)
+        pattern = re.compile(r'(?:' + name_pattern + r')|(?:\d+(?:\.\d+)?)')
+    else:
+        pattern = re.compile(r'(?:\d+(?:\.\d+)?)')
+
+    tokens = []
+    pos = 0
+    for m in pattern.finditer(formula):
+        gap = formula[pos:m.start()]
+        for ch in gap:
+            if ch.isspace():
+                continue
+            if ch in '+-*/()':
+                tokens.append(ch)
+            else:
+                raise FormulaError(f"无法识别的字符 '{ch}'")
+        tokens.append(m.group(0))
+        pos = m.end()
+
+    # Process trailing characters
+    tail = formula[pos:]
+    for ch in tail:
+        if ch.isspace():
+            continue
+        if ch in '+-*/()':
+            tokens.append(ch)
+        else:
+            raise FormulaError(f"无法识别的字符 '{ch}'")
+
+    return tokens
+
+
+def parse_formula(tokens):
+    """Recursive-descent parser for formula tokens.
+
+    Grammar:
+      expr   -> term (('+' | '-') term)*
+      term   -> factor (('*' | '/') factor)*
+      factor -> NAME | NUMBER | '(' expr ')' | '-' factor
+    """
+    pos = [0]  # mutable position tracker
+
+    def peek():
+        return tokens[pos[0]] if pos[0] < len(tokens) else None
+
+    def consume():
+        t = peek()
+        if t is not None:
+            pos[0] += 1
+        return t
+
+    def expr():
+        left = term()
+        while peek() in ('+', '-'):
+            op = consume()
+            right = term()
+            left = (op, left, right)
+        return left
+
+    def term():
+        left = factor()
+        while peek() in ('*', '/'):
+            op = consume()
+            right = factor()
+            left = (op, left, right)
+        return left
+
+    def factor():
+        t = peek()
+        if t is None:
+            raise FormulaError("公式意外结束")
+        if t == '(':
+            consume()
+            result = expr()
+            if peek() != ')':
+                raise FormulaError("缺少右括号 ')'")
+            consume()
+            return result
+        if t == '-':
+            consume()
+            return ('-', ('num', 0.0), factor())
+        if t in ('+', '*', '/'):
+            raise FormulaError(f"意外的运算符 '{t}'")
+        # Number literal
+        try:
+            val = float(t)
+            consume()
+            return ('num', val)
+        except ValueError:
+            pass
+        # Column name reference
+        consume()
+        return ('ref', t)
+
+    ast = expr()
+    if peek() is not None:
+        raise FormulaError(f"公式末尾存在意外字符 '{peek()}'")
+    return ast
+
+
+def collect_refs(ast):
+    """Collect all column name references from an AST."""
+    refs = []
+    if ast[0] == 'ref':
+        refs.append(ast[1])
+    elif ast[0] == 'num':
+        pass
+    else:
+        # Binary or unary operator
+        if len(ast) == 3:
+            refs.extend(collect_refs(ast[1]))
+            refs.extend(collect_refs(ast[2]))
+        elif len(ast) == 2:
+            refs.extend(collect_refs(ast[1]))
+    return refs
+
+
+def evaluate_formula(ast, values):
+    """Evaluate a formula AST against a values dict (name -> float).
+
+    None values are treated as 0.0.  Division by zero raises FormulaError.
+    Result is rounded to 2 decimal places.
+    """
+    if ast[0] == 'num':
+        return ast[1]
+    if ast[0] == 'ref':
+        v = values.get(ast[1], 0.0)
+        if v is None:
+            v = 0.0
+        return v
+    # Unary minus: ('-', ('num', 0.0), operand)
+    if ast[0] == '-' and len(ast) == 3 and ast[1] == ('num', 0.0):
+        return -evaluate_formula(ast[2], values)
+    # Binary operators
+    op = ast[0]
+    left = evaluate_formula(ast[1], values)
+    right = evaluate_formula(ast[2], values)
+    if op == '+':
+        return left + right
+    if op == '-':
+        return left - right
+    if op == '*':
+        return left * right
+    if op == '/':
+        if right == 0:
+            raise FormulaError("除零错误")
+        return left / right
+    raise FormulaError(f"未知运算符 '{op}'")
+
+
 def split_row(source_row, ref_by_employee, source_headers, reference_headers, config,
               source_col_map, ref_col_map, splitting_col_set):
     """Split a row based on reference data."""
@@ -298,6 +465,39 @@ def validate_sheets(config, wb):
         if col_name not in source_headers:
             fatal(f"Error: Splitting column '{col_name}' not found in source sheet")
 
+    # Validate computed columns (if configured)
+    computed_columns_cfg = config.get('input', {}).get('computed_columns', {})
+    if computed_columns_cfg:
+        splitting_col_set = set(config['input']['splitting_columns'])
+        computed_names = list(computed_columns_cfg.keys())
+        known = set(source_headers) | set(computed_names)
+        for i, name in enumerate(computed_names):
+            formula = computed_columns_cfg[name]
+            # Check computed column name exists in source headers
+            if name not in source_headers:
+                pass  # Will be appended to result headers in process_excel
+            # Parse formula and validate references
+            try:
+                tokens = tokenize_formula(formula, known)
+                ast = parse_formula(tokens)
+            except FormulaError as e:
+                errors.append(f"计算列 '{name}' 的公式无效: {e}")
+                continue
+            # Check all referenced columns: must be in splitting_columns or an earlier computed column
+            for ref in collect_refs(ast):
+                if ref in splitting_col_set:
+                    continue  # OK: reference is a splitting column
+                if ref in computed_names[:i]:
+                    continue  # OK: reference is an earlier computed column
+                if ref in source_headers:
+                    errors.append(
+                        f"计算列 '{name}' 公式中引用的 '{ref}' 不在 splitting_columns 中"
+                    )
+                else:
+                    errors.append(
+                        f"计算列 '{name}' 公式中引用的 '{ref}' 不存在于源表列中"
+                    )
+
     # Validate required columns in reference sheet
     required_ref_columns = {
         'employee_id': config['input']['sheet']['reference']['columns']['employee_id'],
@@ -561,6 +761,8 @@ def verify_output(config, source_headers):
     splitting_columns = config['input']['splitting_columns']
 
     splitting_columns = list(dict.fromkeys(config['input']['splitting_columns']))
+    computed_columns_cfg = config.get('input', {}).get('computed_columns', {})
+    computed_col_names = list(computed_columns_cfg.keys()) if computed_columns_cfg else []
 
     if not os.path.exists(output_path):
         errors.append(f"Output file '{output_path}' does not exist")
@@ -605,7 +807,15 @@ def verify_output(config, source_headers):
         else:
             result_col_map_verify[col_name] = col_idx
 
-    # Single pass through result: validate numeric for all splitting columns
+    # Also check computed columns are numeric
+    for col_name in computed_col_names:
+        col_idx = get_column_index(result_headers, col_name)
+        if col_idx is None:
+            errors.append(f"Computed column '{col_name}' not found in result headers")
+        elif col_name not in result_col_map_verify:
+            result_col_map_verify[col_name] = col_idx
+
+    # Single pass through result: validate numeric for all splitting + computed columns
     for i, row in enumerate(result.iter_rows(min_row=2), start=2):
         for col_name, col_idx in result_col_map_verify.items():
             val = row[col_idx - 1].value
@@ -665,7 +875,7 @@ def verify_output(config, source_headers):
 
 
 def validate_config(config):
-    """Validate configuration structure. Returns merge_by_payment_account flag."""
+    """Validate configuration structure. Returns (merge_by_payment_account, computed_columns)."""
     errors = []
 
     if config is None:
@@ -744,6 +954,26 @@ def validate_config(config):
                 else:
                     seen.add(col)
 
+        # computed_columns (optional)
+        computed_columns = inp.get('computed_columns')
+        if computed_columns is not None:
+            if not isinstance(computed_columns, dict) or len(computed_columns) == 0:
+                errors.append("'input.computed_columns' must be a non-empty mapping")
+            else:
+                split_col_set = set(split_cols) if split_cols else set()
+                for name, formula in computed_columns.items():
+                    if not isinstance(name, str) or name.strip() == '':
+                        errors.append("computed_columns key must be a non-empty string")
+                    if not isinstance(formula, str) or formula.strip() == '':
+                        errors.append(f"computed_columns '{name}' formula must be a non-empty string")
+                    if name in split_col_set:
+                        errors.append(f"计算列 '{name}' 不能同时出现在 input.splitting_columns 中")
+                # Check for duplicate computed column names handled by dict (last wins),
+                # but we warn if the same name is defined multiple times — done via dict,
+                # so duplicates are naturally removed. No action needed.
+        else:
+            computed_columns = {}
+
     # Check output section
     out = config.get('output')
     if out is None:
@@ -764,13 +994,13 @@ def validate_config(config):
         error_msg = "Configuration errors:\n" + "\n".join(f"  - {e}" for e in errors)
         fatal(error_msg)
 
-    return merge_by_payment_account
+    return merge_by_payment_account, computed_columns
 
 
 def process_excel(config):
     """Process Excel file according to configuration."""
     # Validate config structure first
-    merge_by_payment_account = validate_config(config)
+    merge_by_payment_account, computed_columns_cfg = validate_config(config)
 
     input_path = config['input']['path']
     output_path = config['output']['path']
@@ -783,7 +1013,7 @@ def process_excel(config):
     try:
         # Load the workbook
         print(f"正在加载工作簿: {input_path}")
-        wb = load_workbook(input_path)
+        wb = load_workbook(input_path, data_only=True)
         print("工作簿加载完成")
         
         # Validate sheets and columns
@@ -818,6 +1048,15 @@ def process_excel(config):
             header_cell.value = payment_account_name
             source_headers.append(payment_account_name)
 
+        # Ensure computed column headers exist (append if not in source)
+        computed_columns_cfg = config.get('input', {}).get('computed_columns', {})
+        for cc_name in computed_columns_cfg:
+            if get_column_index(source_headers, cc_name) is None:
+                new_col = len(source_headers) + 1
+                header_cell = result.cell(row=1, column=new_col)
+                header_cell.value = cc_name
+                source_headers.append(cc_name)
+
         # Precompute column name -> index maps for O(1) lookups (after source_headers is finalized)
         source_col_map = {name: idx + 1 for idx, name in enumerate(source_headers)}
         ref_col_map = {name: idx + 1 for idx, name in enumerate(reference_headers)}
@@ -832,6 +1071,16 @@ def process_excel(config):
                 splitting_col_set.add(idx)
                 if idx not in splitting_col_list:
                     splitting_col_list.append(idx)
+
+        # Pre-parse computed column formulas
+        computed_asts = []  # list of (name, ast, col_index)
+        if computed_columns_cfg:
+            known_for_parse = set(source_headers)
+            for cc_name, cc_formula in computed_columns_cfg.items():
+                ast = parse_formula(tokenize_formula(cc_formula, known_for_parse))
+                cc_idx = source_col_map[cc_name]
+                computed_asts.append((cc_name, ast, cc_idx))
+                known_for_parse.add(cc_name)
 
         # Process data rows
         current_row = 2
@@ -852,6 +1101,13 @@ def process_excel(config):
         write_batch_size = config.get('write_batch_size', 500)
         row_counter = 0
         all_result_rows = []  # Collect (values_list, cells_list) tuples, write later
+        rows_to_compute = set()  # Indices of rows that need computed column evaluation
+        src_row_groups = []  # List of (source_row, [result_indices]) for per-source-row verification
+
+        # Pre-fetch column indices for split detection
+        src_emp_col = source_col_map[config['input']['sheet']['source']['columns']['employee_id']]
+        ref_hours_col = ref_col_map[config['input']['sheet']['reference']['columns']['project_hours']]
+
         t_total_start = time.time()
         t_split_total = 0.0
         t_merge_total = 0.0
@@ -862,6 +1118,17 @@ def process_excel(config):
                 rate = row_counter / elapsed if elapsed > 0 else 0
                 eta = (total_source_rows - row_counter) / rate if rate > 0 else 0
                 print(f"正在处理第 {row_counter}/{total_source_rows} 行 (已耗时 {elapsed:.0f}s, 速度 {rate:.1f} 行/秒, 预计剩余 {eta:.0f}s)...")
+
+            # Determine if this source row will be split (has matching ref with total hours > 0)
+            emp_id_val = row[src_emp_col - 1].value
+            matching = ref_by_employee.get(emp_id_val, [])
+            total_ref = 0.0
+            for r in matching:
+                try:
+                    total_ref += float(r[ref_hours_col - 1].value or 0)
+                except (ValueError, TypeError):
+                    pass
+            is_split = len(matching) > 0 and total_ref > 0
 
             t0 = time.time()
             split_result_rows = split_row(row, ref_by_employee, source_headers, reference_headers, config,
@@ -881,11 +1148,86 @@ def process_excel(config):
             else:
                 merged_rows = split_result_rows
 
+            start_idx = len(all_result_rows)
             for result_row in merged_rows:
                 all_result_rows.append(result_row)
 
+            # Mark split rows for computed column evaluation
+            end_idx = len(all_result_rows)
+            if is_split and computed_asts:
+                for i in range(start_idx, end_idx):
+                    rows_to_compute.add(i)
+                src_row_groups.append((row, list(range(start_idx, end_idx))))
+
         total_elapsed = time.time() - t_total_start
         print(f"处理耗时分析：拆分 {t_split_total:.1f}s, 合并 {t_merge_total:.1f}s, 总计 {total_elapsed:.1f}s")
+
+        # Compute formulas for split rows
+        if computed_asts and rows_to_compute:
+            t_compute_start = time.time()
+            max_cols = len(source_headers)
+            # Pre-collect all column names referenced in any formula
+            ref_names = set()
+            for _cc_name, ast, _cc_idx in computed_asts:
+                ref_names.update(collect_refs(ast))
+            for idx in rows_to_compute:
+                row = all_result_rows[idx]
+                # Pad row to max_cols if needed (for newly appended columns)
+                while len(row) < max_cols:
+                    dummy = Cell(None, column=len(row) + 1)
+                    dummy.value = None
+                    row.append(dummy)
+                # Build values dict from referenced columns only
+                values = {}
+                for hdr_name in ref_names:
+                    col_idx = source_col_map[hdr_name]
+                    v = row[col_idx - 1].value
+                    if v is None:
+                        values[hdr_name] = 0.0
+                    else:
+                        try:
+                            values[hdr_name] = float(v)
+                        except (ValueError, TypeError):
+                            fatal(f"Error: 计算列引用的列 '{hdr_name}' 存在非数值 '{v}'")
+                # Evaluate formulas in order
+                for cc_name, ast, cc_idx in computed_asts:
+                    result_val = evaluate_formula(ast, values)
+                    result_val = round(result_val, 2)
+                    values[cc_name] = result_val
+                    row[cc_idx - 1].value = result_val
+            t_compute_total = time.time() - t_compute_start
+            print(f"计算列耗时：{t_compute_total:.1f}s (共 {len(rows_to_compute)} 行)")
+
+            # Per-source-row verification: sum of computed columns across split rows
+            # must equal the source row's original value
+            src_employee_id_name = config['input']['sheet']['source']['columns']['employee_id']
+            for src_row, result_indices in src_row_groups:
+                emp_id = src_row[source_col_map[src_employee_id_name] - 1].value
+                for cc_name, _ast, cc_idx in computed_asts:
+                    # Skip if source row doesn't have this column (e.g. newly appended)
+                    if cc_idx > len(src_row):
+                        continue
+                    src_val = src_row[cc_idx - 1].value
+                    if src_val is None:
+                        continue  # Source had no value for this column, skip
+                    try:
+                        src_val_f = float(src_val)
+                    except (ValueError, TypeError):
+                        continue
+                    # Sum computed values across all result rows from this source row
+                    result_sum = 0.0
+                    for ri in result_indices:
+                        v = all_result_rows[ri][cc_idx - 1].value
+                        if v is not None:
+                            try:
+                                result_sum += float(v)
+                            except (ValueError, TypeError):
+                                pass
+                    if abs(result_sum - src_val_f) > 0.001:
+                        fatal(
+                            f"Error: 计算列 '{cc_name}' 源行 employee_id='{emp_id}' "
+                            f"拆分结果合计 ({result_sum:.2f}) 与源行值 ({src_val_f:.2f}) 不一致"
+                        )
 
         # Batch write to worksheet
         t_write_start = time.time()

@@ -613,7 +613,9 @@ class TestExcelSplitter(unittest.TestCase):
         """Valid config should pass validate_config without error."""
         from main import validate_config
         config = self._make_minimal_config()
-        self.assertFalse(validate_config(config))  # merge_by_payment_account defaults to False
+        merge, cc = validate_config(config)
+        self.assertFalse(merge)  # merge_by_payment_account defaults to False
+        self.assertEqual(cc, {})  # no computed_columns by default
 
     def test_config_missing_input_section(self):
         """Config missing 'input' key -> SystemExit."""
@@ -1037,6 +1039,528 @@ class TestExcelSplitter(unittest.TestCase):
         result_row = [cell.value for cell in result_sheet[2]]
         # Should match (公司A, 1) → Account_X, ignore the None-employer row
         self.assertEqual(result_row[10], 'Account_X')
+
+    # --- Computed columns tests ---
+
+    def _make_computed_config(self):
+        """Helper: config with computed_columns."""
+        return {
+            'merge_by_payment_account': False,
+            'input': {
+                'path': 'test_input.xlsx',
+                'sheet': {
+                    'source': {
+                        'name': '工资',
+                        'columns': {
+                            'employee_id': '工号',
+                            'project_id': '费用所属中心',
+                            'project_category': '费用类别',
+                            'project_hours': '实际出勤',
+                            'payment_account': '支付账号',
+                            'employer_name': '工资所属单位'
+                        }
+                    },
+                    'reference': {
+                        'name': '工时',
+                        'columns': {
+                            'employee_id': '工号',
+                            'project_id': '费用所属中心',
+                            'project_category': '费用类别',
+                            'project_hours': '实际出勤'
+                        }
+                    },
+                    'payment': {
+                        'name': '支付规则',
+                        'columns': {
+                            'project_id': '费用所属中心',
+                            'payment_account': '支付账号',
+                            'employer_name': '公司'
+                        }
+                    }
+                },
+                'splitting_columns': ['基本工资', '岗位工资'],
+                'computed_columns': {
+                    '福利前工资合计': '基本工资 + 岗位工资'
+                }
+            },
+            'output': {
+                'path': 'test_output.xlsx',
+                'sheet': {
+                    'result': {
+                        'name': '工资拆分'
+                    }
+                }
+            }
+        }
+
+    def test_computed_columns_basic(self):
+        """Computed column = sum of split base columns per result row."""
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '福利前工资合计',
+                          '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
+        self.source_sheet.append(source_headers)
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, 4000.00,
+                                   '研发', '研发部', 21, 'BB', '公司A'])
+
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 1])
+        self.reference_sheet.append(['张三', 'AA', '研发', '2', 4])
+
+        payment_headers = ['费用所属中心', '支付账号', '公司']
+        self.payment_sheet.append(payment_headers)
+        self.payment_sheet.append(['1', 'Account_1', '公司A'])
+        self.payment_sheet.append(['2', 'Account_2', '公司A'])
+        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+
+        self.wb.save('test_input.xlsx')
+        config = self._make_computed_config()
+        process_excel(config)
+
+        output_wb = load_workbook('test_output.xlsx')
+        result_sheet = output_wb['工资拆分']
+        result_rows = list(result_sheet.iter_rows(min_row=2))
+
+        # 2 split rows: project 1 (1/5) and project 2 (4/5)
+        self.assertEqual(len(result_rows), 2)
+        row1 = [cell.value for cell in result_rows[0]]
+        row2 = [cell.value for cell in result_rows[1]]
+
+        # Row 1: 基本工资=200, 岗位工资=600 → 福利前 = 800
+        self.assertAlmostEqual(row1[3], 200.00, places=1)
+        self.assertAlmostEqual(row1[4], 600.00, places=1)
+        self.assertAlmostEqual(row1[5], 800.00, places=1)
+
+        # Row 2: 基本工资=800, 岗位工资=2400 → 福利前 = 3200
+        self.assertAlmostEqual(row2[3], 800.00, places=1)
+        self.assertAlmostEqual(row2[4], 2400.00, places=1)
+        self.assertAlmostEqual(row2[5], 3200.00, places=1)
+
+    def test_computed_columns_chained(self):
+        """Three chained formulas compute correctly."""
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '福利前工资合计',
+                          '用餐补助', '税前应发工资总额(不含差补)', '差旅补助', '实发工资',
+                          '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
+        self.source_sheet.append(source_headers)
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, 4000.00,
+                                   500.00, 4500.00, 200.00, 4700.00,
+                                   '研发', '研发部', 21, 'BB', '公司A'])
+
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
+
+        payment_headers = ['费用所属中心', '支付账号', '公司']
+        self.payment_sheet.append(payment_headers)
+        self.payment_sheet.append(['1', 'Account_1', '公司A'])
+        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+
+        self.wb.save('test_input.xlsx')
+        config = {
+            'merge_by_payment_account': False,
+            'input': {
+                'path': 'test_input.xlsx',
+                'sheet': {
+                    'source': {
+                        'name': '工资',
+                        'columns': {
+                            'employee_id': '工号',
+                            'project_id': '费用所属中心',
+                            'project_category': '费用类别',
+                            'project_hours': '实际出勤',
+                            'payment_account': '支付账号',
+                            'employer_name': '工资所属单位'
+                        }
+                    },
+                    'reference': {
+                        'name': '工时',
+                        'columns': {
+                            'employee_id': '工号',
+                            'project_id': '费用所属中心',
+                            'project_category': '费用类别',
+                            'project_hours': '实际出勤'
+                        }
+                    },
+                    'payment': {
+                        'name': '支付规则',
+                        'columns': {
+                            'project_id': '费用所属中心',
+                            'payment_account': '支付账号',
+                            'employer_name': '公司'
+                        }
+                    }
+                },
+                'splitting_columns': ['基本工资', '岗位工资', '用餐补助', '差旅补助'],
+                'computed_columns': {
+                    '福利前工资合计': '基本工资 + 岗位工资',
+                    '税前应发工资总额(不含差补)': '福利前工资合计 + 用餐补助',
+                    '实发工资': '税前应发工资总额(不含差补) + 差旅补助'
+                }
+            },
+            'output': {
+                'path': 'test_output.xlsx',
+                'sheet': {
+                    'result': {
+                        'name': '工资拆分'
+                    }
+                }
+            }
+        }
+        process_excel(config)
+
+        output_wb = load_workbook('test_output.xlsx')
+        result_sheet = output_wb['工资拆分']
+        result_rows = list(result_sheet.iter_rows(min_row=2))
+
+        self.assertEqual(len(result_rows), 1)
+        row = [cell.value for cell in result_rows[0]]
+
+        # All amounts go to single project (ratio=1.0)
+        self.assertAlmostEqual(row[3], 1000.00, places=1)  # 基本工资
+        self.assertAlmostEqual(row[4], 3000.00, places=1)  # 岗位工资
+        self.assertAlmostEqual(row[5], 4000.00, places=1)  # 福利前 = 1000+3000
+        self.assertAlmostEqual(row[6], 500.00, places=1)   # 用餐补助
+        self.assertAlmostEqual(row[7], 4500.00, places=1)  # 税前 = 4000+500
+        self.assertAlmostEqual(row[8], 200.00, places=1)   # 差旅补助
+        self.assertAlmostEqual(row[9], 4700.00, places=1)  # 实发 = 4500+200
+
+    def test_computed_after_merge(self):
+        """Computed columns work after merge_by_payment_account."""
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '福利前工资合计',
+                          '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
+        self.source_sheet.append(source_headers)
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, 4000.00,
+                                   '研发', '研发部', 21, 'BB', '公司A'])
+
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 1])
+        self.reference_sheet.append(['张三', 'AA', '研发', '2', 4])
+
+        # Same account for both projects → will merge
+        payment_headers = ['费用所属中心', '支付账号', '公司']
+        self.payment_sheet.append(payment_headers)
+        self.payment_sheet.append(['1', 'Account_X', '公司A'])
+        self.payment_sheet.append(['2', 'Account_X', '公司A'])
+        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+
+        self.wb.save('test_input.xlsx')
+        config = self._make_computed_config()
+        config['merge_by_payment_account'] = True
+        process_excel(config)
+
+        output_wb = load_workbook('test_output.xlsx')
+        result_sheet = output_wb['工资拆分']
+        result_rows = list(result_sheet.iter_rows(min_row=2))
+
+        # Merged into 1 row
+        self.assertEqual(len(result_rows), 1)
+        row = [cell.value for cell in result_rows[0]]
+        result_headers = [cell.value for cell in result_sheet[1]]
+
+        # Sum of split values: 基本工资=1000, 岗位工资=3000 → 福利前=4000
+        self.assertAlmostEqual(row[result_headers.index('基本工资')], 1000.00, places=1)
+        self.assertAlmostEqual(row[result_headers.index('岗位工资')], 3000.00, places=1)
+        self.assertAlmostEqual(row[result_headers.index('福利前工资合计')], 4000.00, places=1)
+        self.assertEqual(row[result_headers.index('支付账号')], 'Account_X')
+
+    def test_computed_unsplit_rows_unchanged(self):
+        """Non-split rows keep computed column values unchanged."""
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '福利前工资合计',
+                          '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
+        self.source_sheet.append(source_headers)
+        # Source has a pre-existing 福利前=9999 (not matching 基本+岗位=4000)
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, 9999.00,
+                                   '研发', '研发部', 21, 'BB', '公司A'])
+
+        # No matching reference → row not split
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+
+        payment_headers = ['费用所属中心', '支付账号', '公司']
+        self.payment_sheet.append(payment_headers)
+        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+
+        self.wb.save('test_input.xlsx')
+        config = self._make_computed_config()
+        process_excel(config)
+
+        output_wb = load_workbook('test_output.xlsx')
+        result_sheet = output_wb['工资拆分']
+        result_rows = list(result_sheet.iter_rows(min_row=2))
+
+        self.assertEqual(len(result_rows), 1)
+        row = [cell.value for cell in result_rows[0]]
+        # Unsplit row: computed column keeps original source value (9999), not recomputed
+        self.assertEqual(row[5], 9999.00)
+
+    def test_computed_new_column_appended(self):
+        """Computed column not in source headers → appended to result."""
+        # Source has no 福利前工资合计 column
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资',
+                          '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
+        self.source_sheet.append(source_headers)
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00,
+                                   '研发', '研发部', 21, 'BB', '公司A'])
+
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
+
+        payment_headers = ['费用所属中心', '支付账号', '公司']
+        self.payment_sheet.append(payment_headers)
+        self.payment_sheet.append(['1', 'Account_1', '公司A'])
+        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+
+        self.wb.save('test_input.xlsx')
+        config = self._make_computed_config()
+        process_excel(config)
+
+        output_wb = load_workbook('test_output.xlsx')
+        result_sheet = output_wb['工资拆分']
+        result_headers = [cell.value for cell in result_sheet[1]]
+
+        # 福利前工资合计 should be appended as new column
+        self.assertIn('支付账号', result_headers)
+        self.assertIn('福利前工资合计', result_headers)
+
+        result_row = [cell.value for cell in result_sheet[2]]
+        # 基本工资=1000, 岗位工资=3000 → 福利前=4000
+        qf_idx = result_headers.index('福利前工资合计')
+        self.assertAlmostEqual(result_row[qf_idx], 4000.00, places=1)
+
+    # --- Computed column validation error tests ---
+
+    def test_computed_in_splitting_fatal(self):
+        """Computed column name in splitting_columns → fatal."""
+        from main import validate_config
+        config = self._make_computed_config()
+        config['input']['splitting_columns'].append('福利前工资合计')
+        with self.assertRaises(SystemExit):
+            validate_config(config)
+
+    def test_computed_unknown_ref_fatal(self):
+        """Formula references nonexistent column → fatal in validate_sheets."""
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '福利前工资合计',
+                          '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
+        self.source_sheet.append(source_headers)
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, 4000.00,
+                                   '研发', '研发部', 21, 'BB', '公司A'])
+
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
+
+        payment_headers = ['费用所属中心', '支付账号', '公司']
+        self.payment_sheet.append(payment_headers)
+        self.payment_sheet.append(['1', 'Account_1', '公司A'])
+        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+
+        self.wb.save('test_input.xlsx')
+        config = self._make_computed_config()
+        # Formula references '不存在的列' which doesn't exist
+        config['input']['computed_columns']['福利前工资合计'] = '基本工资 + 不存在的列'
+        with self.assertRaises(SystemExit):
+            process_excel(config)
+
+    def test_computed_ref_not_in_splitting_fatal(self):
+        """Formula references a column not in splitting_columns → fatal."""
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '福利前工资合计',
+                          '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
+        self.source_sheet.append(source_headers)
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, 4000.00,
+                                   '研发', '研发部', 21, 'BB', '公司A'])
+
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
+
+        payment_headers = ['费用所属中心', '支付账号', '公司']
+        self.payment_sheet.append(payment_headers)
+        self.payment_sheet.append(['1', 'Account_1', '公司A'])
+        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+
+        self.wb.save('test_input.xlsx')
+        config = self._make_computed_config()
+        # '部门' exists in source but NOT in splitting_columns
+        config['input']['computed_columns']['福利前工资合计'] = '基本工资 + 部门'
+        with self.assertRaises(SystemExit):
+            process_excel(config)
+
+    def test_computed_circular_fatal(self):
+        """Formula references a later computed column → fatal."""
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '福利前工资合计',
+                          '用餐补助', '税前应发工资总额(不含差补)',
+                          '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
+        self.source_sheet.append(source_headers)
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, 4000.00,
+                                   500.00, 4500.00,
+                                   '研发', '研发部', 21, 'BB', '公司A'])
+
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
+
+        payment_headers = ['费用所属中心', '支付账号', '公司']
+        self.payment_sheet.append(payment_headers)
+        self.payment_sheet.append(['1', 'Account_1', '公司A'])
+        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+
+        self.wb.save('test_input.xlsx')
+        config = {
+            'merge_by_payment_account': False,
+            'input': {
+                'path': 'test_input.xlsx',
+                'sheet': {
+                    'source': {
+                        'name': '工资',
+                        'columns': {
+                            'employee_id': '工号',
+                            'project_id': '费用所属中心',
+                            'project_category': '费用类别',
+                            'project_hours': '实际出勤',
+                            'payment_account': '支付账号',
+                            'employer_name': '工资所属单位'
+                        }
+                    },
+                    'reference': {
+                        'name': '工时',
+                        'columns': {
+                            'employee_id': '工号',
+                            'project_id': '费用所属中心',
+                            'project_category': '费用类别',
+                            'project_hours': '实际出勤'
+                        }
+                    },
+                    'payment': {
+                        'name': '支付规则',
+                        'columns': {
+                            'project_id': '费用所属中心',
+                            'payment_account': '支付账号',
+                            'employer_name': '公司'
+                        }
+                    }
+                },
+                'splitting_columns': ['基本工资', '岗位工资', '用餐补助'],
+                'computed_columns': {
+                    # 福利前 references 税前 which is defined later → error
+                    '福利前工资合计': '基本工资 + 税前应发工资总额(不含差补)',
+                    '税前应发工资总额(不含差补)': '福利前工资合计 + 用餐补助'
+                }
+            },
+            'output': {
+                'path': 'test_output.xlsx',
+                'sheet': {
+                    'result': {
+                        'name': '工资拆分'
+                    }
+                }
+            }
+        }
+        with self.assertRaises(SystemExit):
+            process_excel(config)
+
+    def test_verify_computed_source_row_mismatch(self):
+        """Per-source-row sum mismatch is caught."""
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '福利前工资合计',
+                          '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
+        self.source_sheet.append(source_headers)
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, 4000.00,
+                                   '研发', '研发部', 21, 'BB', '公司A'])
+
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 1])
+        self.reference_sheet.append(['张三', 'AA', '研发', '2', 4])
+
+        payment_headers = ['费用所属中心', '支付账号', '公司']
+        self.payment_sheet.append(payment_headers)
+        self.payment_sheet.append(['1', 'Account_1', '公司A'])
+        self.payment_sheet.append(['2', 'Account_2', '公司A'])
+        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+
+        self.wb.save('test_input.xlsx')
+        # Re-open and modify the saved file so source value doesn't match computed sum
+        # source 福利前 = 5000, but computed sum = 800 + 3200 = 4000
+        wb2 = load_workbook('test_input.xlsx')
+        wb2['工资']['F2'] = 5000.00
+        wb2.save('test_input.xlsx')
+        wb2.close()
+        config = self._make_computed_config()
+        with self.assertRaises(SystemExit):
+            process_excel(config)
+
+    # --- Formula parser tests ---
+
+    def test_formula_parser_basic(self):
+        """Basic formula parsing and evaluation."""
+        from main import tokenize_formula, parse_formula, evaluate_formula
+        known = ['基本工资', '岗位工资']
+        tokens = tokenize_formula('基本工资 + 岗位工资', known)
+        ast = parse_formula(tokens)
+        result = evaluate_formula(ast, {'基本工资': 100.0, '岗位工资': 200.0})
+        self.assertEqual(result, 300.0)
+
+    def test_formula_parser_precedence(self):
+        """Operator precedence: * before +."""
+        from main import tokenize_formula, parse_formula, evaluate_formula
+        known = ['基本工资', '岗位工资']
+        tokens = tokenize_formula('基本工资 + 岗位工资 * 2', known)
+        ast = parse_formula(tokens)
+        result = evaluate_formula(ast, {'基本工资': 100.0, '岗位工资': 200.0})
+        self.assertEqual(result, 500.0)  # 100 + (200*2) = 500
+
+    def test_formula_parser_parens(self):
+        """Parentheses override precedence."""
+        from main import tokenize_formula, parse_formula, evaluate_formula
+        known = ['基本工资', '岗位工资']
+        tokens = tokenize_formula('(基本工资 + 岗位工资) * 2', known)
+        ast = parse_formula(tokens)
+        result = evaluate_formula(ast, {'基本工资': 100.0, '岗位工资': 200.0})
+        self.assertEqual(result, 600.0)  # (100+200)*2 = 600
+
+    def test_formula_parser_numeric_literal(self):
+        """Numeric literals in formulas."""
+        from main import tokenize_formula, parse_formula, evaluate_formula
+        known = ['基本工资']
+        tokens = tokenize_formula('基本工资 * 1.5', known)
+        ast = parse_formula(tokens)
+        result = evaluate_formula(ast, {'基本工资': 100.0})
+        self.assertEqual(result, 150.0)
+
+    def test_formula_parser_name_with_parens(self):
+        """Column name containing parentheses is matched as one token."""
+        from main import tokenize_formula, parse_formula, evaluate_formula
+        known = ['税前应发工资总额(不含差补)', '差旅补助']
+        tokens = tokenize_formula('税前应发工资总额(不含差补) + 差旅补助', known)
+        ast = parse_formula(tokens)
+        result = evaluate_formula(ast, {'税前应发工资总额(不含差补)': 4500.0, '差旅补助': 200.0})
+        self.assertEqual(result, 4700.0)
+
+    def test_formula_parser_division_by_zero(self):
+        """Division by zero raises FormulaError."""
+        from main import tokenize_formula, parse_formula, evaluate_formula, FormulaError
+        known = ['基本工资']
+        tokens = tokenize_formula('基本工资 / 0', known)
+        ast = parse_formula(tokens)
+        with self.assertRaises(FormulaError):
+            evaluate_formula(ast, {'基本工资': 100.0})
+
+    def test_formula_parser_malformed(self):
+        """Malformed formula raises FormulaError."""
+        from main import tokenize_formula, parse_formula, FormulaError
+        known = ['基本工资']
+        tokens = tokenize_formula('基本工资 +', known)
+        with self.assertRaises(FormulaError):
+            parse_formula(tokens)
+
+    def test_formula_parser_none_value(self):
+        """None values are treated as 0.0."""
+        from main import tokenize_formula, parse_formula, evaluate_formula
+        known = ['基本工资', '岗位工资']
+        tokens = tokenize_formula('基本工资 + 岗位工资', known)
+        ast = parse_formula(tokens)
+        result = evaluate_formula(ast, {'基本工资': 100.0, '岗位工资': None})
+        self.assertEqual(result, 100.0)
 
 
 if __name__ == '__main__':
