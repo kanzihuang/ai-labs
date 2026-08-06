@@ -10,7 +10,6 @@ class TestExcelSplitter(unittest.TestCase):
     def setUp(self):
         # Create test configuration
         self.config = {
-            'merge_by_payment_account': True,
             'input': {
                 'path': 'test_input.xlsx',
                 'sheet': {
@@ -21,7 +20,6 @@ class TestExcelSplitter(unittest.TestCase):
                             'project_id': '费用所属中心',
                             'project_category': '费用类别',
                             'project_hours': '实际出勤',
-                            'payment_account': '支付账号',
                             'employer_name': '工资所属单位'
                         }
                     },
@@ -38,9 +36,10 @@ class TestExcelSplitter(unittest.TestCase):
                         'name': '支付规则',
                         'columns': {
                             'project_id': '费用所属中心',
-                            'payment_account': '支付账号',
-                            'employer_name': '公司'
-                        }
+                            'employer_name': '公司',
+                            'project_category': '费用类别'
+                        },
+                        'output_columns': ['支付账号']
                     }
                 },
                 'splitting_columns': ['基本工资', '岗位工资']
@@ -83,7 +82,7 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(reference_headers)
 
         # Set up payment sheet headers
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
 
         # Save the workbook
@@ -117,9 +116,9 @@ class TestExcelSplitter(unittest.TestCase):
         # No data in reference that matches the source
 
         # Set up payment sheet with mapping for source's project_id
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         # Save the workbook
         self.wb.save('test_input.xlsx')
@@ -156,12 +155,12 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(['张三', 'AA', '销售', '3', 4])
 
         # Set up payment sheet: each project maps to a distinct account (no merging)
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account1', '公司A'])
-        self.payment_sheet.append(['2', 'Account2', '公司A'])
-        self.payment_sheet.append(['3', 'Account3', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account1'])
+        self.payment_sheet.append(['2', '公司A', '研发', 'Account2'])
+        self.payment_sheet.append(['3', '公司A', '销售', 'Account3'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         # Save the workbook
         self.wb.save('test_input.xlsx')
@@ -192,114 +191,6 @@ class TestExcelSplitter(unittest.TestCase):
                     self.assertEqual(expected_val, actual_val)
 
     # --- New tests for merge by payment account ---
-
-    def test_merge_by_payment_account(self):
-        """Merge rows that share the same payment account"""
-        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
-        self.source_sheet.append(source_headers)
-        source_data = ['张三', 'AA', '中国', 1000.00, 3000.00, '研发', '研发部', 21, 'BB', '公司A']
-        self.source_sheet.append(source_data)
-
-        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
-        self.reference_sheet.append(reference_headers)
-        self.reference_sheet.append(['张三', 'AA', '研发', '1', 1])
-        self.reference_sheet.append(['张三', 'AA', '研发', '2', 4])
-        self.reference_sheet.append(['张三', 'AA', '销售', '3', 4])
-
-        # Projects 1 and 2 share Account X, project 3 has Account Y
-        payment_headers = ['费用所属中心', '支付账号', '公司']
-        self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_X', '公司A'])
-        self.payment_sheet.append(['2', 'Account_X', '公司A'])
-        self.payment_sheet.append(['3', 'Account_Y', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
-
-        self.wb.save('test_input.xlsx')
-        process_excel(self.config)
-
-        output_wb = load_workbook('test_output.xlsx')
-        result_sheet = output_wb['工资拆分']
-
-        # Expected: 2 rows (projects 1+2 merged, project 3 separate)
-        # Row 1: projects "1,2" merged, hours = 1+4 = 5, salaries = 111.11+444.44 = 555.55
-        # Row 2: project "3" alone, hours = 4, salaries = 444.44
-        expected_results = [
-            ['张三', 'AA', '中国', 555.55, 1666.66, '研发', '1,2', 5, 'BB', '公司A', 'Account_X'],
-            ['张三', 'AA', '中国', 444.44, 1333.33, '销售', '3', 4, 'BB', '公司A', 'Account_Y']
-        ]
-
-        for i, expected in enumerate(expected_results, start=2):
-            result_row = [cell.value for cell in result_sheet[i]]
-            for j, (expected_val, actual_val) in enumerate(zip(expected, result_row)):
-                if isinstance(expected_val, (int, float)) and isinstance(actual_val, (int, float)):
-                    self.assertAlmostEqual(expected_val, actual_val, places=1)
-                else:
-                    self.assertEqual(expected_val, actual_val)
-
-    def test_no_merge_needed(self):
-        """Each project maps to distinct account, no merge occurs"""
-        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
-        self.source_sheet.append(source_headers)
-        source_data = ['张三', 'AA', '中国', 1000.00, 3000.00, '研发', '研发部', 21, 'BB', '公司A']
-        self.source_sheet.append(source_data)
-
-        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
-        self.reference_sheet.append(reference_headers)
-        self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
-        self.reference_sheet.append(['张三', 'AA', '销售', '3', 4])
-
-        # Distinct accounts
-        payment_headers = ['费用所属中心', '支付账号', '公司']
-        self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_1', '公司A'])
-        self.payment_sheet.append(['3', 'Account_3', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
-
-        self.wb.save('test_input.xlsx')
-        process_excel(self.config)
-
-        output_wb = load_workbook('test_output.xlsx')
-        result_sheet = output_wb['工资拆分']
-
-        # Should have 2 rows (no merging)
-        result_rows = list(result_sheet.iter_rows(min_row=2))
-        self.assertEqual(len(result_rows), 2)
-
-    def test_merge_with_mixed_categories(self):
-        """Merge rows with different project_categories - categories comma-separated"""
-        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
-        self.source_sheet.append(source_headers)
-        source_data = ['李四', 'BB', '中国', 2000.00, 4000.00, '研发', '研发部', 21, 'CC', '公司A']
-        self.source_sheet.append(source_data)
-
-        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
-        self.reference_sheet.append(reference_headers)
-        self.reference_sheet.append(['李四', 'BB', '研发', '1', 2])
-        self.reference_sheet.append(['李四', 'BB', '销售', '2', 3])
-
-        # Both projects map to same account, but have different categories
-        payment_headers = ['费用所属中心', '支付账号', '公司']
-        self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_X', '公司A'])
-        self.payment_sheet.append(['2', 'Account_X', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
-
-        self.wb.save('test_input.xlsx')
-        process_excel(self.config)
-
-        output_wb = load_workbook('test_output.xlsx')
-        result_sheet = output_wb['工资拆分']
-
-        # Single merged row: project_id "1,2", categories "研发,销售"
-        result_row = [cell.value for cell in result_sheet[2]]
-        # project_id = "1,2" (merged), category = "研发,销售"
-        self.assertEqual(result_row[5], '研发,销售')   # project_category column
-        self.assertEqual(result_row[6], '1,2')          # project_id (merged)
-        self.assertEqual(result_row[7], 5)              # total hours
-        self.assertEqual(result_row[10], 'Account_X')    # payment_account
-
-    # --- Validation tests ---
-
     def test_reference_duplicate_employee_project(self):
         """Reference table has duplicate (employee_id, project_id) -> fatal"""
         source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
@@ -312,10 +203,10 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(['张三', 'AA', '研发', '1', 1])
         self.reference_sheet.append(['张三', 'AA', '研发', '1', 4])
 
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_X', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
         with self.assertRaises(SystemExit):
@@ -331,11 +222,11 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(reference_headers)
         self.reference_sheet.append(['张三', 'AA', '研发', '1', 1])
 
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_X', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
         self.payment_sheet.append(['1', 'Account_Y', '公司A'])  # Duplicate project_id
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
         with self.assertRaises(SystemExit):
@@ -351,10 +242,10 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(reference_headers)
         self.reference_sheet.append(['张三', 'AA', '研发', '1', 1])
 
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', None])  # Empty account
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', None])  # Empty account
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
         with self.assertRaises(SystemExit):
@@ -370,10 +261,10 @@ class TestExcelSplitter(unittest.TestCase):
         reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
         self.reference_sheet.append(reference_headers)
 
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
         # Only project "1", no "研发部"
-        self.payment_sheet.append(['1', 'Account_X', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
 
         self.wb.save('test_input.xlsx')
         with self.assertRaises(SystemExit):
@@ -390,10 +281,10 @@ class TestExcelSplitter(unittest.TestCase):
         # Reference has project_id "99" not in payment
         self.reference_sheet.append(['张三', 'AA', '研发', '99', 5])
 
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_X', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
         with self.assertRaises(SystemExit):
@@ -412,110 +303,28 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(['张三', 'AA', '研发', '2', 4])
 
         # Payment has reference project_ids but NOT source's "研发部"
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_X', '公司A'])
-        self.payment_sheet.append(['2', 'Account_X', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
+        self.payment_sheet.append(['2', '公司A', '研发', 'Account_X'])
 
         self.wb.save('test_input.xlsx')
         # Should NOT fatal — source's project_id "研发部" will be replaced by reference's project_ids
         # which are both in payment
         process_excel(self.config)
 
-        # Verify output exists and has merged rows
+        # Verify output exists and has 2 rows (no merge)
         output_wb = load_workbook('test_output.xlsx')
         result_sheet = output_wb['工资拆分']
-        result_row = [cell.value for cell in result_sheet[2]]
-        # project_id should be "1,2" (from reference, merged by account), not "研发部"
-        self.assertEqual(result_row[6], '1,2')
-        self.assertEqual(result_row[10], 'Account_X')
+        result_rows = list(result_sheet.iter_rows(min_row=2))
+        self.assertEqual(len(result_rows), 2)
+        self.assertEqual(result_rows[0][6].value, '1')
+        self.assertEqual(result_rows[0][10].value, 'Account_X')
+        self.assertEqual(result_rows[1][6].value, '2')
+        self.assertEqual(result_rows[1][10].value, 'Account_X')
 
 
     # --- Merge key correctness ---
-
-    def test_different_employees_same_account_not_merged(self):
-        """Different employees sharing same payment account should NOT be merged"""
-        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
-        self.source_sheet.append(source_headers)
-        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, '研发', '研发部', 21, 'BB', '公司A'])
-        self.source_sheet.append(['李四', 'CC', '中国', 2000.00, 4000.00, '研发', '研发部', 21, 'DD', '公司A'])
-
-        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
-        self.reference_sheet.append(reference_headers)
-        self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
-        self.reference_sheet.append(['李四', 'CC', '研发', '1', 10])
-
-        # Both employees' projects map to the SAME account
-        payment_headers = ['费用所属中心', '支付账号', '公司']
-        self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_X', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
-
-        self.wb.save('test_input.xlsx')
-        process_excel(self.config)
-
-        output_wb = load_workbook('test_output.xlsx')
-        result_sheet = output_wb['工资拆分']
-
-        # Should have 2 rows — one per employee, NOT merged together
-        result_rows = list(result_sheet.iter_rows(min_row=2))
-        self.assertEqual(len(result_rows), 2,
-                         "Different employees should not merge even with same account")
-
-        row1 = [cell.value for cell in result_rows[0]]
-        row2 = [cell.value for cell in result_rows[1]]
-
-        # Employee AA: salary 1000/3000 fully to project 1, account Account_X
-        self.assertEqual(row1[1], 'AA')
-        self.assertEqual(row1[10], 'Account_X')
-
-        # Employee CC: salary 2000/4000 fully to project 1, account Account_X
-        self.assertEqual(row2[1], 'CC')
-        self.assertEqual(row2[10], 'Account_X')
-
-    # --- Merge scope ---
-
-    def test_same_employee_multiple_source_rows_not_merged(self):
-        """Same employee with multiple source rows should NOT merge across source rows"""
-        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
-        self.source_sheet.append(source_headers)
-        # Same employee (AA), two source rows with different salary data
-        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, '研发', '研发部', 21, 'BB', '公司A'])
-        self.source_sheet.append(['张三', 'AA', '中国', 500.00,  1500.00, '研发', '研发部', 21, 'BB', '公司A'])
-
-        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
-        self.reference_sheet.append(reference_headers)
-        self.reference_sheet.append(['张三', 'AA', '研发', '1', 10])
-
-        payment_headers = ['费用所属中心', '支付账号', '公司']
-        self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_X', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
-
-        self.wb.save('test_input.xlsx')
-        process_excel(self.config)
-
-        output_wb = load_workbook('test_output.xlsx')
-        result_sheet = output_wb['工资拆分']
-
-        # Should have 2 rows — each source row independently split & merged
-        result_rows = list(result_sheet.iter_rows(min_row=2))
-        self.assertEqual(len(result_rows), 2,
-                         "Same employee's multiple source rows should not merge across source rows")
-
-        row1 = [cell.value for cell in result_rows[0]]
-        row2 = [cell.value for cell in result_rows[1]]
-
-        # First source row: 基本工资=1000, 岗位工资=3000
-        self.assertAlmostEqual(row1[3], 1000.00, places=1)
-        self.assertAlmostEqual(row1[4], 3000.00, places=1)
-
-        # Second source row: 基本工资=500, 岗位工资=1500
-        self.assertAlmostEqual(row2[3], 500.00, places=1)
-        self.assertAlmostEqual(row2[4], 1500.00, places=1)
-
-    # --- Mixed split / non-split ---
-
     def test_mixed_split_and_no_split_rows(self):
         """One source row splits, another doesn't — both handled correctly"""
         source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
@@ -531,11 +340,11 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(['张三', 'AA', '研发', '2', 5])
 
         # Payment has reference project_ids AND source row 2's project_id, but NOT row 1's
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_X', '公司A'])
-        self.payment_sheet.append(['2', 'Account_Y', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
+        self.payment_sheet.append(['2', '公司A', '研发', 'Account_Y'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
         # Note: no "no_such_project" in payment, but that's OK because row 1 splits
 
         self.wb.save('test_input.xlsx')
@@ -575,7 +384,6 @@ class TestExcelSplitter(unittest.TestCase):
                             'project_id': '费用所属中心',
                             'project_category': '费用类别',
                             'project_hours': '实际出勤',
-                            'payment_account': '支付账号',
                             'employer_name': '工资所属单位'
                         }
                     },
@@ -592,9 +400,10 @@ class TestExcelSplitter(unittest.TestCase):
                         'name': '支付规则',
                         'columns': {
                             'project_id': '费用所属中心',
-                            'payment_account': '支付账号',
-                            'employer_name': '公司'
-                        }
+                            'employer_name': '公司',
+                            'project_category': '费用类别'
+                        },
+                        'output_columns': ['支付账号']
                     }
                 },
                 'splitting_columns': ['基本工资']
@@ -613,8 +422,7 @@ class TestExcelSplitter(unittest.TestCase):
         """Valid config should pass validate_config without error."""
         from main import validate_config
         config = self._make_minimal_config()
-        merge, cc = validate_config(config)
-        self.assertFalse(merge)  # merge_by_payment_account defaults to False
+        cc = validate_config(config)
         self.assertEqual(cc, {})  # no computed_columns by default
 
     def test_config_missing_input_section(self):
@@ -683,10 +491,10 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(reference_headers)
         self.reference_sheet.append(['张三', None, '研发', '1', 5])  # None employee_id
 
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_X', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
         with self.assertRaises(SystemExit):
@@ -702,10 +510,10 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(reference_headers)
         self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
 
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_X', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
         with self.assertRaises(SystemExit):
@@ -721,10 +529,10 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(reference_headers)
         self.reference_sheet.append(['张三', 'AA', '研发', '1', -5])  # Negative hours
 
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_X', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
         with self.assertRaises(SystemExit):
@@ -740,10 +548,10 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(reference_headers)
         self.reference_sheet.append(['张三', 'AA', '研发', '1', 'N/A'])  # Non-numeric hours
 
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_X', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
         with self.assertRaises(SystemExit):
@@ -760,10 +568,10 @@ class TestExcelSplitter(unittest.TestCase):
         # Reference uses int type for employee_id, source uses str
         self.reference_sheet.append(['张三', 123, '研发', '1', 5])
 
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_X', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
         with self.assertRaises(SystemExit):
@@ -784,11 +592,11 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(['张三', 'AA', '研发', '2', 3])
 
         # Distinct accounts
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_1', '公司A'])
-        self.payment_sheet.append(['2', 'Account_2', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_1'])
+        self.payment_sheet.append(['2', '公司A', '研发', 'Account_2'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
         process_excel(self.config)
@@ -820,9 +628,9 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(reference_headers)
         self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
 
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_X', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
 
         self.wb.save('test_input.xlsx')
         process_excel(self.config)
@@ -835,101 +643,7 @@ class TestExcelSplitter(unittest.TestCase):
         self.assertIn('工时', wb.sheetnames)
         wb.close()
 
-    # --- merge_by_payment_account integration test ---
-
-    def test_split_without_merge(self):
-        """merge_by_payment_account=False (default): splits correctly, payment_account populated, no merge."""
-        config = {
-            'merge_by_payment_account': False,
-            'input': {
-                'path': 'test_input.xlsx',
-                'sheet': {
-                    'source': {
-                        'name': '工资',
-                        'columns': {
-                            'employee_id': '工号',
-                            'project_id': '费用所属中心',
-                            'project_category': '费用类别',
-                            'project_hours': '实际出勤',
-                            'payment_account': '支付账号',
-                            'employer_name': '工资所属单位'
-                        }
-                    },
-                    'reference': {
-                        'name': '工时',
-                        'columns': {
-                            'employee_id': '工号',
-                            'project_id': '费用所属中心',
-                            'project_category': '费用类别',
-                            'project_hours': '实际出勤'
-                        }
-                    },
-                    'payment': {
-                        'name': '支付规则',
-                        'columns': {
-                            'project_id': '费用所属中心',
-                            'payment_account': '支付账号',
-                            'employer_name': '公司'
-                        }
-                    }
-                },
-                'splitting_columns': ['基本工资', '岗位工资']
-            },
-            'output': {
-                'path': 'test_output.xlsx',
-                'sheet': {
-                    'result': {
-                        'name': '工资拆分'
-                    }
-                }
-            }
-        }
-
-        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
-        self.source_sheet.append(source_headers)
-        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, '研发', '研发部', 21, 'BB', '公司A'])
-
-        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
-        self.reference_sheet.append(reference_headers)
-        self.reference_sheet.append(['张三', 'AA', '研发', '1', 2])
-        self.reference_sheet.append(['张三', 'AA', '研发', '2', 3])
-
-        payment_headers = ['费用所属中心', '支付账号', '公司']
-        self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_1', '公司A'])
-        self.payment_sheet.append(['2', 'Account_2', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
-
-        self.wb.save('test_input.xlsx')
-        process_excel(config)
-
-        output_wb = load_workbook('test_output.xlsx')
-        result_sheet = output_wb['工资拆分']
-
-        # Should have 2 rows (split but not merged)
-        result_rows = list(result_sheet.iter_rows(min_row=2))
-        self.assertEqual(len(result_rows), 2)
-
-        # Headers should include payment_account
-        result_headers = [cell.value for cell in result_sheet[1]]
-        expected_headers = source_headers + ['支付账号']
-        self.assertEqual(result_headers, expected_headers)
-
-        # Verify split values and payment_account populated
-        row1 = [cell.value for cell in result_rows[0]]
-        row2 = [cell.value for cell in result_rows[1]]
-        # Total 基本工资 = 1000, split 2/5 and 3/5
-        self.assertAlmostEqual(row1[3], 400.00, places=1)
-        self.assertAlmostEqual(row2[3], 600.00, places=1)
-        # Total 岗位工资 = 3000, split 2/5 and 3/5
-        self.assertAlmostEqual(row1[4], 1200.00, places=1)
-        self.assertAlmostEqual(row2[4], 1800.00, places=1)
-        # Each row has its own payment_account
-        self.assertEqual(row1[10], 'Account_1')
-        self.assertEqual(row2[10], 'Account_2')
-
-    # --- Composite key (employer_name, project_id) tests ---
-
+    # --- 3-field payment matching tests ---
     def test_composite_key_same_project_diff_employer_ok(self):
         """Same project_id with different employer_name is NOT a duplicate — both valid."""
         source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
@@ -941,11 +655,11 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(['张三', 'AA', '研发', '1', 10])
 
         # Same project_id "1" with two different employers — both valid
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_X', '公司A'])
-        self.payment_sheet.append(['1', 'Account_Y', '公司B'])
-        self.payment_sheet.append(['研发部', 'Account_X', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
+        self.payment_sheet.append(['1', '公司B', '研发', 'Account_Y'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_X'])
 
         self.wb.save('test_input.xlsx')
         process_excel(self.config)
@@ -969,12 +683,12 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(['张三', 'AA', '研发', '1', 10])
 
         # Same project_id "1", different employers → different accounts
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_X', '公司A'])
-        self.payment_sheet.append(['1', 'Account_Y', '公司B'])
-        self.payment_sheet.append(['研发部', 'Account_X', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_Y', '公司B'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
+        self.payment_sheet.append(['1', '公司B', '研发', 'Account_Y'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_X'])
+        self.payment_sheet.append(['研发部', '公司B', '研发', 'Account_Y'])
 
         self.wb.save('test_input.xlsx')
         process_excel(self.config)
@@ -1004,10 +718,10 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(['张三', 'AA', '研发', '99', 10])
 
         # Payment has project "99" but only for 公司B — not 公司A
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['99', 'Account_Z', '公司B'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['99', '公司B', '研发', 'Account_Z'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
         with self.assertRaises(SystemExit):
@@ -1025,11 +739,11 @@ class TestExcelSplitter(unittest.TestCase):
 
         # Payment has a row with empty employer_name (should be skipped)
         # and another row with valid employer_name for the same project_id
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_X', '公司A'])
-        self.payment_sheet.append(['1', 'Account_IGNORED', None])  # Empty employer → skipped
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
+        self.payment_sheet.append(['1', None, '研发', 'Account_IGNORED'])  # Empty employer → skipped
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
         process_excel(self.config)
@@ -1045,7 +759,6 @@ class TestExcelSplitter(unittest.TestCase):
     def _make_computed_config(self):
         """Helper: config with computed_columns."""
         return {
-            'merge_by_payment_account': False,
             'input': {
                 'path': 'test_input.xlsx',
                 'sheet': {
@@ -1056,7 +769,6 @@ class TestExcelSplitter(unittest.TestCase):
                             'project_id': '费用所属中心',
                             'project_category': '费用类别',
                             'project_hours': '实际出勤',
-                            'payment_account': '支付账号',
                             'employer_name': '工资所属单位'
                         }
                     },
@@ -1073,9 +785,10 @@ class TestExcelSplitter(unittest.TestCase):
                         'name': '支付规则',
                         'columns': {
                             'project_id': '费用所属中心',
-                            'payment_account': '支付账号',
-                            'employer_name': '公司'
-                        }
+                            'employer_name': '公司',
+                            'project_category': '费用类别'
+                        },
+                        'output_columns': ['支付账号']
                     }
                 },
                 'splitting_columns': ['基本工资', '岗位工资'],
@@ -1106,11 +819,11 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(['张三', 'AA', '研发', '1', 1])
         self.reference_sheet.append(['张三', 'AA', '研发', '2', 4])
 
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_1', '公司A'])
-        self.payment_sheet.append(['2', 'Account_2', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_1'])
+        self.payment_sheet.append(['2', '公司A', '研发', 'Account_2'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
         config = self._make_computed_config()
@@ -1149,14 +862,13 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(reference_headers)
         self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
 
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_1', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_1'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
         config = {
-            'merge_by_payment_account': False,
             'input': {
                 'path': 'test_input.xlsx',
                 'sheet': {
@@ -1167,7 +879,6 @@ class TestExcelSplitter(unittest.TestCase):
                             'project_id': '费用所属中心',
                             'project_category': '费用类别',
                             'project_hours': '实际出勤',
-                            'payment_account': '支付账号',
                             'employer_name': '工资所属单位'
                         }
                     },
@@ -1184,9 +895,10 @@ class TestExcelSplitter(unittest.TestCase):
                         'name': '支付规则',
                         'columns': {
                             'project_id': '费用所属中心',
-                            'payment_account': '支付账号',
-                            'employer_name': '公司'
-                        }
+                            'employer_name': '公司',
+                            'project_category': '费用类别'
+                        },
+                        'output_columns': ['支付账号']
                     }
                 },
                 'splitting_columns': ['基本工资', '岗位工资', '用餐补助', '差旅补助'],
@@ -1222,47 +934,6 @@ class TestExcelSplitter(unittest.TestCase):
         self.assertAlmostEqual(row[7], 4500.00, places=1)  # 税前 = 4000+500
         self.assertAlmostEqual(row[8], 200.00, places=1)   # 差旅补助
         self.assertAlmostEqual(row[9], 4700.00, places=1)  # 实发 = 4500+200
-
-    def test_computed_after_merge(self):
-        """Computed columns work after merge_by_payment_account."""
-        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '福利前工资合计',
-                          '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
-        self.source_sheet.append(source_headers)
-        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, 4000.00,
-                                   '研发', '研发部', 21, 'BB', '公司A'])
-
-        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
-        self.reference_sheet.append(reference_headers)
-        self.reference_sheet.append(['张三', 'AA', '研发', '1', 1])
-        self.reference_sheet.append(['张三', 'AA', '研发', '2', 4])
-
-        # Same account for both projects → will merge
-        payment_headers = ['费用所属中心', '支付账号', '公司']
-        self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_X', '公司A'])
-        self.payment_sheet.append(['2', 'Account_X', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
-
-        self.wb.save('test_input.xlsx')
-        config = self._make_computed_config()
-        config['merge_by_payment_account'] = True
-        process_excel(config)
-
-        output_wb = load_workbook('test_output.xlsx')
-        result_sheet = output_wb['工资拆分']
-        result_rows = list(result_sheet.iter_rows(min_row=2))
-
-        # Merged into 1 row
-        self.assertEqual(len(result_rows), 1)
-        row = [cell.value for cell in result_rows[0]]
-        result_headers = [cell.value for cell in result_sheet[1]]
-
-        # Sum of split values: 基本工资=1000, 岗位工资=3000 → 福利前=4000
-        self.assertAlmostEqual(row[result_headers.index('基本工资')], 1000.00, places=1)
-        self.assertAlmostEqual(row[result_headers.index('岗位工资')], 3000.00, places=1)
-        self.assertAlmostEqual(row[result_headers.index('福利前工资合计')], 4000.00, places=1)
-        self.assertEqual(row[result_headers.index('支付账号')], 'Account_X')
-
     def test_computed_unsplit_rows_unchanged(self):
         """Non-split rows keep computed column values unchanged."""
         source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '福利前工资合计',
@@ -1276,9 +947,9 @@ class TestExcelSplitter(unittest.TestCase):
         reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
         self.reference_sheet.append(reference_headers)
 
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
         config = self._make_computed_config()
@@ -1306,10 +977,10 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(reference_headers)
         self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
 
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_1', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_1'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
         config = self._make_computed_config()
@@ -1338,10 +1009,10 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(reference_headers)
         self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
 
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_1', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_1'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
         config = self._make_computed_config()
@@ -1362,10 +1033,10 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(reference_headers)
         self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
 
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_1', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_1'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
         config = self._make_computed_config()
@@ -1388,14 +1059,13 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(reference_headers)
         self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
 
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_1', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_1'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
         config = {
-            'merge_by_payment_account': False,
             'input': {
                 'path': 'test_input.xlsx',
                 'sheet': {
@@ -1406,7 +1076,6 @@ class TestExcelSplitter(unittest.TestCase):
                             'project_id': '费用所属中心',
                             'project_category': '费用类别',
                             'project_hours': '实际出勤',
-                            'payment_account': '支付账号',
                             'employer_name': '工资所属单位'
                         }
                     },
@@ -1423,9 +1092,10 @@ class TestExcelSplitter(unittest.TestCase):
                         'name': '支付规则',
                         'columns': {
                             'project_id': '费用所属中心',
-                            'payment_account': '支付账号',
-                            'employer_name': '公司'
-                        }
+                            'employer_name': '公司',
+                            'project_category': '费用类别'
+                        },
+                        'output_columns': ['支付账号']
                     }
                 },
                 'splitting_columns': ['基本工资', '岗位工资', '用餐补助'],
@@ -1460,11 +1130,11 @@ class TestExcelSplitter(unittest.TestCase):
         self.reference_sheet.append(['张三', 'AA', '研发', '1', 1])
         self.reference_sheet.append(['张三', 'AA', '研发', '2', 4])
 
-        payment_headers = ['费用所属中心', '支付账号', '公司']
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', 'Account_1', '公司A'])
-        self.payment_sheet.append(['2', 'Account_2', '公司A'])
-        self.payment_sheet.append(['研发部', 'Account_RD', '公司A'])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_1'])
+        self.payment_sheet.append(['2', '公司A', '研发', 'Account_2'])
+        self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
         # Re-open and modify the saved file so source value doesn't match computed sum

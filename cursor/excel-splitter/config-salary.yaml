@@ -12,7 +12,6 @@ input:
         project_id: "费用所属中心"
         project_category: "费用类别"
         project_hours: "实际出勤"
-        payment_account: "支付账户"
         employer_name: "工资所属单位"
     reference:
       name: "输入-工时表"
@@ -25,8 +24,10 @@ input:
       name: "输入-支付规则"
       columns:
         project_id: "费用所属中心"
-        payment_account: "支付账户"
         employer_name: "公司"
+        project_category: "费用类别"
+      output_columns:
+        - 支付账户
   splitting_columns:
   - "基本工资"
   - "岗位工资"

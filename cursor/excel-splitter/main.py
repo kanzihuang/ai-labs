@@ -310,129 +310,47 @@ def split_row(source_row, ref_by_employee, source_headers, reference_headers, co
     return result_rows
 
 def populate_payment_account(rows, payment_mapping, config, source_col_map, source_headers):
-    """Populate payment_account column for each row (without merging)."""
+    """Populate output columns from payment mapping for each row (without merging)."""
     employer_name_col = source_col_map.get(config['input']['sheet']['source']['columns']['employer_name'])
     project_id_col = source_col_map.get(config['input']['sheet']['source']['columns']['project_id'])
-    payment_account_col = source_col_map.get(config['input']['sheet']['source']['columns']['payment_account'])
+    project_category_col = source_col_map.get(config['input']['sheet']['source']['columns']['project_category'])
     employee_id_col = source_col_map.get(config['input']['sheet']['source']['columns']['employee_id'])
 
-    # Ensure all rows have enough cells for payment_account column
-    # (source sheet may not have the payment_account column)
+    output_columns = config['input']['sheet']['payment']['output_columns']
+
+    # Ensure all rows have enough cells for output columns
     max_cols = len(source_headers)
-    if payment_account_col:
-        for row in rows:
-            while len(row) < max_cols:
-                dummy = Cell(None, column=len(row) + 1)
-                dummy.value = None
-                dummy._style = copy(row[0]._style) if row else None
-                row.append(dummy)
+    for row in rows:
+        while len(row) < max_cols:
+            dummy = Cell(None, column=len(row) + 1)
+            dummy.value = None
+            dummy._style = copy(row[0]._style) if row else None
+            row.append(dummy)
 
     for row in rows:
         proj_id = row[project_id_col - 1].value
         proj_id_str = str(proj_id).strip() if proj_id is not None else ''
         employer_name = row[employer_name_col - 1].value if employer_name_col else None
         employer_name_str = str(employer_name).strip() if employer_name is not None else ''
+        proj_category = row[project_category_col - 1].value if project_category_col else None
+        proj_category_str = str(proj_category).strip() if proj_category is not None else ''
         emp_id = row[employee_id_col - 1].value
 
-        # Use composite key (employer_name, project_id) to look up payment_account
-        lookup_key = (employer_name_str, proj_id_str)
+        # Use composite key (employer_name, project_id, project_category) to look up payment mapping
+        lookup_key = (employer_name_str, proj_id_str, proj_category_str)
         if lookup_key not in payment_mapping:
             fatal(f"Error: employee_id='{emp_id}', employer_name='{employer_name_str}', "
-                  f"project_id='{proj_id_str}' has no matching payment account")
+                  f"project_id='{proj_id_str}', project_category='{proj_category_str}' "
+                  f"has no matching payment record")
 
-        if payment_account_col:
-            row[payment_account_col - 1].value = payment_mapping[lookup_key]
+        # Write output column values from payment mapping
+        matched = payment_mapping[lookup_key]
+        for out_header in output_columns:
+            out_col_idx = source_col_map.get(out_header)
+            if out_col_idx:
+                row[out_col_idx - 1].value = matched.get(out_header)
 
 
-def merge_rows_by_account(split_rows, source_headers, config,
-                          source_col_map, splitting_col_list):
-    """Merge split result rows by (employee_id, payment_account)."""
-    if not split_rows:
-        return []
-
-    # Precompute all column indices once using O(1) map lookups
-    employee_id_col = source_col_map.get(config['input']['sheet']['source']['columns']['employee_id'])
-    project_id_col = source_col_map.get(config['input']['sheet']['source']['columns']['project_id'])
-    project_category_col = source_col_map.get(config['input']['sheet']['source']['columns']['project_category'])
-    project_hours_col = source_col_map.get(config['input']['sheet']['source']['columns']['project_hours'])
-    payment_account_col = source_col_map.get(config['input']['sheet']['source']['columns']['payment_account'])
-
-    splitting_col_indices = splitting_col_list  # Already precomputed
-
-    # Group rows by (employee_id, payment_account), preserving first-occurrence order
-    # Dict maintains insertion order (Python 3.7+)
-    groups = {}  # group_key -> [rows]
-
-    for row in split_rows:
-        emp_id = row[employee_id_col - 1].value
-        proj_account = row[payment_account_col - 1].value if payment_account_col else None
-        group_key = (emp_id, proj_account)
-
-        if group_key in groups:
-            groups[group_key].append(row)
-        else:
-            groups[group_key] = [row]
-
-    # Merge each group
-    merged_rows = []
-    for group_key, rows in groups.items():
-        emp_id, proj_account = group_key
-
-        # Start with shallow copy of first row (list of cells)
-        merged_row = list(rows[0])
-
-        # Collect distinct project_ids and project_categories
-        proj_ids = []
-        proj_categories = []
-        total_hours = 0.0
-
-        # Initialize splitting column sums
-        splitting_sums = {col_idx: 0.0 for col_idx in splitting_col_indices if col_idx}
-
-        for row in rows:
-            pid = row[project_id_col - 1].value
-            pid_str = str(pid).strip() if pid is not None else ''
-            if pid_str and pid_str not in proj_ids:
-                proj_ids.append(pid_str)
-
-            if project_category_col:
-                cat = row[project_category_col - 1].value
-                cat_str = str(cat).strip() if cat is not None else ''
-                if cat_str and cat_str not in proj_categories:
-                    proj_categories.append(cat_str)
-
-            if project_hours_col:
-                hours = row[project_hours_col - 1].value
-                try:
-                    total_hours += float(hours) if hours is not None else 0.0
-                except (ValueError, TypeError):
-                    fatal(f"Error: Cannot sum project_hours value '{hours}'")
-
-            # Sum splitting columns
-            for col_idx in splitting_col_indices:
-                if col_idx:
-                    val = row[col_idx - 1].value
-                    try:
-                        splitting_sums[col_idx] += float(val) if val is not None else 0.0
-                    except (ValueError, TypeError):
-                        fatal(f"Error: Cannot sum splitting column '{source_headers[col_idx - 1]}' value '{val}'")
-
-        # Set merged values
-        merged_row[project_id_col - 1].value = ','.join(proj_ids)
-        if project_category_col:
-            merged_row[project_category_col - 1].value = ','.join(proj_categories)
-        if project_hours_col:
-            merged_row[project_hours_col - 1].value = round(total_hours, 2)
-        if payment_account_col:
-            merged_row[payment_account_col - 1].value = proj_account
-
-        # Set summed splitting columns
-        for col_idx, sum_val in splitting_sums.items():
-            merged_row[col_idx - 1].value = round(sum_val, 2)
-
-        merged_rows.append(merged_row)
-
-    return merged_rows
 
 
 def validate_sheets(config, wb):
@@ -523,11 +441,18 @@ def validate_sheets(config, wb):
     # Validate required columns in payment sheet
     required_payment_columns = {
         'project_id': config['input']['sheet']['payment']['columns']['project_id'],
-        'payment_account': config['input']['sheet']['payment']['columns']['payment_account']
+        'employer_name': config['input']['sheet']['payment']['columns']['employer_name'],
+        'project_category': config['input']['sheet']['payment']['columns']['project_category']
     }
     for col_id, col_name in required_payment_columns.items():
         if col_name not in payment_headers:
             fatal(f"Error: Required column '{col_name}' not found in payment sheet")
+
+    # Validate output_columns exist in payment sheet
+    output_columns = config['input']['sheet']['payment']['output_columns']
+    for out_header in output_columns:
+        if out_header not in payment_headers:
+            fatal(f"Error: output_columns header '{out_header}' not found in payment sheet '{payment_sheet}'")
 
     # --- Pre-processing data validation ---
     ref_employee_id_col = get_column_index(reference_headers,
@@ -544,58 +469,78 @@ def validate_sheets(config, wb):
     payment_mapping = {}
     payment_project_id_col = get_column_index(payment_headers,
                                               config['input']['sheet']['payment']['columns']['project_id'])
-    payment_payment_account_col = get_column_index(payment_headers,
-                                                    config['input']['sheet']['payment']['columns']['payment_account'])
     payment_employer_name_col = get_column_index(payment_headers,
                                                   config['input']['sheet']['payment']['columns']['employer_name'])
+    payment_project_category_col = get_column_index(payment_headers,
+                                                     config['input']['sheet']['payment']['columns']['project_category'])
+
+    # Pre-compute output_columns column indices in payment sheet
+    payment_output_col_indices = {}
+    for out_header in output_columns:
+        payment_output_col_indices[out_header] = get_column_index(payment_headers, out_header)
 
     # --- Payment checks ---
     # Build payment_mapping and payment_project_ids before reference/source scans
     payment_project_ids = set()
     ref_employee_ids = set()
-    ref_projects_by_employee = {}  # employee_id -> set of project_ids (for composite key check)
+    ref_projects_by_employee = {}  # employee_id -> set of (project_id, project_category) for composite key check
     ref_hours_by_employee = {}  # employee_id -> total_hours (to detect 0-hour rows)
 
-    # Check 2 & 3: Payment table - no duplicate (employer_name, project_id) + payment_account not empty
+    # Check 2 & 3: Payment table - no duplicate (employer_name, project_id, project_category) + output_columns not empty
     seen_payment_pairs = set()
     reported_duplicates = set()
     for row in payment.iter_rows(min_row=2):
         proj_id = row[payment_project_id_col - 1].value
-        proj_account = row[payment_payment_account_col - 1].value
         employer_name = row[payment_employer_name_col - 1].value
+        proj_category = row[payment_project_category_col - 1].value
 
-        # Skip rows with empty project_id or empty employer_name
+        # Skip rows with empty project_id, employer_name, or project_category
         if proj_id is None or str(proj_id).strip() == '':
             continue
         if employer_name is None or str(employer_name).strip() == '':
             continue
+        if proj_category is None or str(proj_category).strip() == '':
+            continue
 
         proj_id_str = str(proj_id).strip()
         employer_name_str = str(employer_name).strip()
+        proj_category_str = str(proj_category).strip()
 
-        # Check 2: no duplicate (employer_name, project_id) (report each duplicate pair only once)
-        pair = (employer_name_str, proj_id_str)
+        # Check 2: no duplicate (employer_name, project_id, project_category)
+        pair = (employer_name_str, proj_id_str, proj_category_str)
         if pair in seen_payment_pairs:
             if pair not in reported_duplicates:
-                errors.append(f"Duplicate (employer_name='{employer_name_str}', project_id='{proj_id_str}') "
+                errors.append(f"Duplicate (employer_name='{employer_name_str}', project_id='{proj_id_str}', "
+                             f"project_category='{proj_category_str}') "
                              f"found in sheet '{payment_sheet}'")
                 reported_duplicates.add(pair)
             continue
         seen_payment_pairs.add(pair)
 
-        # Check 3: payment_account must not be empty
-        if proj_account is None or str(proj_account).strip() == '':
-            errors.append(f"project_id '{proj_id_str}' has empty payment_account in "
-                         f"payment sheet '{payment_sheet}'")
-            continue
-
-        payment_mapping[pair] = str(proj_account).strip()
+        # Check 3: output_columns must not be empty
+        for out_header in output_columns:
+            out_col_idx = payment_output_col_indices[out_header]
+            out_val = row[out_col_idx - 1].value
+            if out_val is None or str(out_val).strip() == '':
+                errors.append(f"(employer_name='{employer_name_str}', project_id='{proj_id_str}', "
+                             f"project_category='{proj_category_str}') has empty '{out_header}' in "
+                             f"payment sheet '{payment_sheet}'")
+                break
+        else:
+            # Build dict of all payment row values
+            row_values = {}
+            for col_idx, cell in enumerate(row, start=1):
+                header = payment_headers[col_idx - 1]
+                row_values[header] = cell.value
+            payment_mapping[pair] = row_values
 
     # Build set of all project_ids in payment for Check 4 partial check
-    payment_project_ids = set(pid for (_, pid) in payment_mapping.keys())
+    payment_project_ids = set(pid for (_, pid, _) in payment_mapping.keys())
 
     # --- Consolidated single-pass scan of reference sheet ---
     # Checks 1, 4, 6, 8, 9, and partial 10 (type collection)
+    ref_project_category_col = get_column_index(reference_headers,
+                                                 config['input']['sheet']['reference']['columns']['project_category'])
     ref_pairs = set()
     reported_ref_duplicates = set()
     ref_missing_pids = set()
@@ -605,6 +550,7 @@ def validate_sheets(config, wb):
     for row_num, row in enumerate(reference.iter_rows(min_row=2), start=2):
         emp_id = row[ref_employee_id_col - 1].value
         proj_id = row[ref_project_id_col - 1].value
+        proj_category = row[ref_project_category_col - 1].value
         hours_val = row[ref_hours_col - 1].value
 
         # Check 6: empty employee_id
@@ -618,12 +564,15 @@ def validate_sheets(config, wb):
             ref_id_types.add(type(emp_id).__name__)
 
         # Build ref_employee_ids and ref_projects_by_employee for source scan checks
+        # Store (project_id, project_category) tuples for 3-field matching
         if emp_id is not None:
             ref_employee_ids.add(emp_id)
             if emp_id not in ref_projects_by_employee:
                 ref_projects_by_employee[emp_id] = set()
             if proj_id is not None and str(proj_id).strip() != '':
-                ref_projects_by_employee[emp_id].add(str(proj_id).strip())
+                proj_id_str = str(proj_id).strip()
+                proj_cat_str = str(proj_category).strip() if proj_category is not None else ''
+                ref_projects_by_employee[emp_id].add((proj_id_str, proj_cat_str))
 
         # Track total hours per employee (for Check 11 zero-hour detection)
         if emp_id is not None:
@@ -635,12 +584,14 @@ def validate_sheets(config, wb):
                 except (ValueError, TypeError):
                     pass  # Non-numeric hours caught by Check 8
 
-        # Check 1: duplicate (employee_id, project_id)
+        # Check 1: duplicate (employee_id, project_id, project_category)
         if emp_id is not None and proj_id is not None:
-            pair = (emp_id, proj_id)
+            proj_cat_str = str(proj_category).strip() if proj_category is not None else ''
+            pair = (emp_id, proj_id, proj_category)
             if pair in ref_pairs:
                 if pair not in reported_ref_duplicates:
-                    errors.append(f"Duplicate (employee_id='{emp_id}', project_id='{proj_id}') "
+                    errors.append(f"Duplicate (employee_id='{emp_id}', project_id='{proj_id}', "
+                                  f"project_category='{proj_category}') "
                                   f"found in reference sheet '{reference_sheet}'")
                     reported_ref_duplicates.add(pair)
             else:
@@ -675,22 +626,24 @@ def validate_sheets(config, wb):
     for emp_id, total_hours in ref_hours_by_employee.items():
         if total_hours == 0.0:
             projects = ref_projects_by_employee.get(emp_id, set())
-            if len(projects) > 1:
+            pids = {p for p, _ in projects}
+            if len(pids) > 1:
                 errors.append(f"employee_id='{emp_id}' has total hours=0 but multiple project_ids "
-                             f"in reference sheet '{reference_sheet}': {sorted(projects)}. "
+                             f"in reference sheet '{reference_sheet}': {sorted(pids)}. "
                              f"When hours are 0, only one project_id is allowed.")
 
     # --- Consolidated single-pass scan of source sheet ---
-    # Checks 5, 7, partial 10 (type collection), and collect employer names for split rows
+    # Checks 5, 7, partial 10 (type collection), and collect match context for split rows
     src_employee_id_col = get_column_index(source_headers,
                                            config['input']['sheet']['source']['columns']['employee_id'])
+    src_employer_name_col = get_column_index(source_headers,
+                                              config['input']['sheet']['source']['columns']['employer_name'])
+    src_project_category_col = get_column_index(source_headers,
+                                                 config['input']['sheet']['source']['columns']['project_category'])
     reported_empty_src_id = False
     src_id_types = set()
     source_missing_pairs = set()
-    src_employers_by_employee = {}  # employee_id -> set(employer_names) for split-eligible rows
-
-    src_employer_name_col = get_column_index(source_headers,
-                                              config['input']['sheet']['source']['columns']['employer_name'])
+    src_match_context_by_employee = {}  # employee_id -> set((employer_name,)) for split-eligible rows
 
     for row_num, row in enumerate(source.iter_rows(min_row=2), start=2):
         emp_id = row[src_employee_id_col - 1].value
@@ -705,44 +658,49 @@ def validate_sheets(config, wb):
         if emp_id is not None and not (isinstance(emp_id, str) and str(emp_id).strip() == ''):
             src_id_types.add(type(emp_id).__name__)
 
-        # Check 5: non-split rows must have payment mapping
-        if source_project_id_col and src_employer_name_col:
+        # Check 5: non-split rows must have payment mapping (3-field key)
+        if source_project_id_col and src_employer_name_col and src_project_category_col:
             if emp_id in ref_employee_ids:
-                # Collect all employer_names for composite key check (Check 11)
+                # Collect employer_name for composite key check (Check 11)
                 employer_name = row[src_employer_name_col - 1].value
                 employer_name_str = str(employer_name).strip() if employer_name is not None else ''
-                if emp_id not in src_employers_by_employee:
-                    src_employers_by_employee[emp_id] = set()
-                src_employers_by_employee[emp_id].add(employer_name_str)
-                continue  # Will be split/replaced; source project_id replaced by reference
+                if emp_id not in src_match_context_by_employee:
+                    src_match_context_by_employee[emp_id] = set()
+                src_match_context_by_employee[emp_id].add(employer_name_str)
+                continue  # Will be split/replaced; source project_id/project_category replaced by reference
             proj_id = row[source_project_id_col - 1].value
             employer_name = row[src_employer_name_col - 1].value
+            proj_category = row[src_project_category_col - 1].value
             if proj_id is not None and str(proj_id).strip() != '' \
                and employer_name is not None and str(employer_name).strip() != '':
-                pair = (str(employer_name).strip(), str(proj_id).strip())
+                proj_id_str = str(proj_id).strip()
+                employer_name_str = str(employer_name).strip()
+                proj_cat_str = str(proj_category).strip() if proj_category is not None else ''
+                pair = (employer_name_str, proj_id_str, proj_cat_str)
                 if pair not in payment_mapping:
                     source_missing_pairs.add(pair)
 
     # Report Check 5 errors after source scan
     if source_missing_pairs:
         for pair in sorted(source_missing_pairs):
-            errors.append(f"(employer_name='{pair[0]}', project_id='{pair[1]}') in source sheet "
+            errors.append(f"(employer_name='{pair[0]}', project_id='{pair[1]}', "
+                         f"project_category='{pair[2]}') in source sheet "
                          f"'{source_sheet}' has no matching record in sheet '{payment_sheet}'")
 
-    # Check 11: Split-eligible rows - composite key (employer_name, project_id) must exist in payment
-    # Reference project_ids are used after split (and also for zero-hour rows which now
-    # replace source project_id with reference project_id).
+    # Check 11: Split-eligible rows - composite key (employer_name, project_id, project_category) must exist in payment
+    # Reference project_ids and project_categories are used after split (and also for zero-hour rows
+    # which replace source project_id/project_category with reference values).
     split_missing_pairs = set()
-    for emp_id, employer_names in src_employers_by_employee.items():
+    for emp_id, employer_names in src_match_context_by_employee.items():
         ref_projects = ref_projects_by_employee.get(emp_id, set())
         for employer_name in employer_names:
-            for proj_id in ref_projects:
-                pair = (employer_name, proj_id)
+            for proj_id, proj_cat in ref_projects:
+                pair = (employer_name, proj_id, proj_cat)
                 if pair not in payment_mapping:
-                    split_missing_pairs.add((emp_id, employer_name, proj_id))
-    for emp_id, employer_name, proj_id in sorted(split_missing_pairs):
+                    split_missing_pairs.add((emp_id, employer_name, proj_id, proj_cat))
+    for emp_id, employer_name, proj_id, proj_cat in sorted(split_missing_pairs):
         errors.append(f"employee_id='{emp_id}', employer_name='{employer_name}', "
-                     f"project_id='{proj_id}' has no matching record "
+                     f"project_id='{proj_id}', project_category='{proj_cat}' has no matching record "
                      f"in sheet '{payment_sheet}'")
 
     # Check 10: employee_id type mismatch between sheets
@@ -883,7 +841,7 @@ def verify_output(config, source_headers):
 
 
 def validate_config(config):
-    """Validate configuration structure. Returns (merge_by_payment_account, computed_columns)."""
+    """Validate configuration structure. Returns computed_columns."""
     errors = []
 
     if config is None:
@@ -910,8 +868,10 @@ def validate_config(config):
                     errors.append("Missing or invalid 'input.sheet.source.name' in configuration")
                 if 'columns' not in source:
                     errors.append("Missing 'input.sheet.source.columns' in configuration")
-                elif 'employee_id' not in source['columns']:
-                    errors.append("Missing 'input.sheet.source.columns.employee_id' in configuration")
+                else:
+                    for col in ['employee_id', 'project_id', 'project_category', 'project_hours', 'employer_name']:
+                        if col not in source['columns']:
+                            errors.append(f"Missing 'input.sheet.source.columns.{col}' in configuration")
 
             # Reference sheet
             ref = sheets.get('reference')
@@ -934,19 +894,20 @@ def validate_config(config):
             elif not ('name' in pay and isinstance(pay['name'], str) and pay['name'].strip() != '' \
                and 'columns' in pay \
                and 'project_id' in pay['columns'] \
-               and 'payment_account' in pay['columns'] \
-               and 'employer_name' in pay['columns']):
+               and 'employer_name' in pay['columns'] \
+               and 'project_category' in pay['columns']):
                 errors.append("Missing or incomplete 'input.sheet.payment' configuration")
 
-            # employer_name and payment_account are required in source columns
-            source_cols = sheets.get('source', {}).get('columns', {})
-            if 'employer_name' not in source_cols:
-                errors.append("'employer_name' is required in source columns")
-            if 'payment_account' not in source_cols:
-                errors.append("'payment_account' is required in source columns")
-
-            # Read merge_by_payment_account config (default: False)
-            merge_by_payment_account = config.get('merge_by_payment_account', False)
+            # Validate output_columns (required)
+            output_columns = pay.get('output_columns')
+            if output_columns is None:
+                errors.append("Missing 'input.sheet.payment.output_columns' in configuration")
+            elif not isinstance(output_columns, list) or len(output_columns) == 0:
+                errors.append("'input.sheet.payment.output_columns' must be a non-empty list")
+            else:
+                for col in output_columns:
+                    if not isinstance(col, str) or col.strip() == '':
+                        errors.append("'input.sheet.payment.output_columns' entries must be non-empty strings")
 
         # splitting_columns
         split_cols = inp.get('splitting_columns')
@@ -1002,13 +963,13 @@ def validate_config(config):
         error_msg = "Configuration errors:\n" + "\n".join(f"  - {e}" for e in errors)
         fatal(error_msg)
 
-    return merge_by_payment_account, computed_columns
+    return computed_columns
 
 
 def process_excel(config):
     """Process Excel file according to configuration."""
     # Validate config structure first
-    merge_by_payment_account, computed_columns_cfg = validate_config(config)
+    computed_columns_cfg = validate_config(config)
 
     input_path = config['input']['path']
     output_path = config['output']['path']
@@ -1048,28 +1009,25 @@ def process_excel(config):
             if keep_style:
                 copy_cell_style(cell, new_cell)
 
-        # Ensure payment_account column exists in source_headers (payment is required)
-        payment_account_name = config['input']['sheet']['source']['columns'].get('payment_account')
-        if payment_account_name and get_column_index(source_headers, payment_account_name) is None:
-            new_col = len(source_headers) + 1
-            header_cell = result.cell(row=1, column=new_col)
-            header_cell.value = payment_account_name
-            source_headers.append(payment_account_name)
+        # Ensure output_columns exist in source_headers; append if missing
+        output_columns = config['input']['sheet']['payment']['output_columns']
+        for out_header in output_columns:
+            if get_column_index(source_headers, out_header) is None:
+                new_col = len(source_headers) + 1
+                header_cell = result.cell(row=1, column=new_col)
+                header_cell.value = out_header
+                source_headers.append(out_header)
 
         # Precompute column name -> index maps for O(1) lookups (after source_headers is finalized)
         source_col_map = {name: idx + 1 for idx, name in enumerate(source_headers)}
         ref_col_map = {name: idx + 1 for idx, name in enumerate(reference_headers)}
 
         # Precompute splitting column indices as set (fast membership test in split_row)
-        # and ordered list (for merge_rows_by_account)
         splitting_col_set = set()
-        splitting_col_list = []
         for col_name in config['input']['splitting_columns']:
             idx = source_col_map.get(col_name)
             if idx is not None:
                 splitting_col_set.add(idx)
-                if idx not in splitting_col_list:
-                    splitting_col_list.append(idx)
 
         # Pre-parse computed column formulas
         computed_columns_cfg = config.get('input', {}).get('computed_columns', {})
@@ -1110,7 +1068,6 @@ def process_excel(config):
 
         t_total_start = time.time()
         t_split_total = 0.0
-        t_merge_total = 0.0
         for row in source.iter_rows(min_row=2):
             row_counter += 1
             if row_counter % write_batch_size == 0 or row_counter == 1:
@@ -1135,21 +1092,12 @@ def process_excel(config):
                                            source_col_map, ref_col_map, splitting_col_set)
             t_split_total += time.time() - t0
 
-            # Populate payment_account column for each split row
+            # Populate output columns from payment mapping for each split row
             populate_payment_account(split_result_rows, payment_mapping, config, source_col_map,
                                      source_headers)
 
-            # Merge split rows by payment account (only if configured)
-            if merge_by_payment_account:
-                t0 = time.time()
-                merged_rows = merge_rows_by_account(split_result_rows, source_headers, config,
-                                                     source_col_map, splitting_col_list)
-                t_merge_total += time.time() - t0
-            else:
-                merged_rows = split_result_rows
-
             start_idx = len(all_result_rows)
-            for result_row in merged_rows:
+            for result_row in split_result_rows:
                 all_result_rows.append(result_row)
 
             # Mark split rows for computed column evaluation
@@ -1160,7 +1108,7 @@ def process_excel(config):
                 src_row_groups.append((row, list(range(start_idx, end_idx))))
 
         total_elapsed = time.time() - t_total_start
-        print(f"处理耗时分析：拆分 {t_split_total:.1f}s, 合并 {t_merge_total:.1f}s, 总计 {total_elapsed:.1f}s")
+        print(f"处理耗时分析：拆分 {t_split_total:.1f}s, 总计 {total_elapsed:.1f}s")
 
         # Compute formulas for split rows
         computed_errors = []
