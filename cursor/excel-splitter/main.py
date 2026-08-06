@@ -486,7 +486,7 @@ def validate_sheets(config, wb):
     ref_projects_by_employee = {}  # employee_id -> set of (project_id, project_category) for composite key check
     ref_hours_by_employee = {}  # employee_id -> total_hours (to detect 0-hour rows)
 
-    # Check 2 & 3: Payment table - no duplicate (employer_name, project_id, project_category) + output_columns not empty
+    # Check 2: Payment table - no duplicate (employer_name, project_id, project_category)
     seen_payment_pairs = set()
     reported_duplicates = set()
     for row in payment.iter_rows(min_row=2):
@@ -517,22 +517,12 @@ def validate_sheets(config, wb):
             continue
         seen_payment_pairs.add(pair)
 
-        # Check 3: output_columns must not be empty
-        for out_header in output_columns:
-            out_col_idx = payment_output_col_indices[out_header]
-            out_val = row[out_col_idx - 1].value
-            if out_val is None or str(out_val).strip() == '':
-                errors.append(f"(employer_name='{employer_name_str}', project_id='{proj_id_str}', "
-                             f"project_category='{proj_category_str}') has empty '{out_header}' in "
-                             f"payment sheet '{payment_sheet}'")
-                break
-        else:
-            # Build dict of all payment row values
-            row_values = {}
-            for col_idx, cell in enumerate(row, start=1):
-                header = payment_headers[col_idx - 1]
-                row_values[header] = cell.value
-            payment_mapping[pair] = row_values
+        # Build dict of all payment row values
+        row_values = {}
+        for col_idx, cell in enumerate(row, start=1):
+            header = payment_headers[col_idx - 1]
+            row_values[header] = cell.value
+        payment_mapping[pair] = row_values
 
     # Build set of all project_ids in payment for Check 4 partial check
     payment_project_ids = set(pid for (_, pid, _) in payment_mapping.keys())

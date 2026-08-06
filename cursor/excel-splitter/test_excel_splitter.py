@@ -225,7 +225,7 @@ class TestExcelSplitter(unittest.TestCase):
         payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
         self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
-        self.payment_sheet.append(['1', 'Account_Y', '公司A'])  # Duplicate project_id
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_Y'])  # Duplicate (employer, project_id, category)
         self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
@@ -233,7 +233,7 @@ class TestExcelSplitter(unittest.TestCase):
             process_excel(self.config)
 
     def test_payment_empty_account(self):
-        """Payment has non-empty project_id with empty payment_account -> fatal"""
+        """Payment has non-empty project_id with empty payment_account -> allowed (no check)"""
         source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
         self.source_sheet.append(source_headers)
         self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, '研发', '研发部', 21, 'BB', '公司A'])
@@ -244,12 +244,12 @@ class TestExcelSplitter(unittest.TestCase):
 
         payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
         self.payment_sheet.append(payment_headers)
-        self.payment_sheet.append(['1', '公司A', '研发', None])  # Empty account
+        self.payment_sheet.append(['1', '公司A', '研发', None])  # Empty account — allowed
         self.payment_sheet.append(['研发部', '公司A', '研发', 'Account_RD'])
 
         self.wb.save('test_input.xlsx')
-        with self.assertRaises(SystemExit):
-            process_excel(self.config)
+        # Should NOT raise SystemExit — empty output columns are allowed
+        process_excel(self.config)
 
     def test_source_project_not_in_payment(self):
         """Source project_id missing from payment -> fatal"""
