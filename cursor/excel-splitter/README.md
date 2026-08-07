@@ -20,6 +20,7 @@
 - `input.sheet.*.columns` 下的键值对表示处理过程中涉及到的列，键为列的标识，值为列的名称，查找列时通过列名称在表头中定位
 - `input.splitting_columns` 下的列表表示需要按比例拆分的列
 - `input.computed_columns`（可选）：拆分后按公式计算派生列。键为列名，值为公式表达式。按定义顺序依次计算，后续公式可引用前面的计算结果。公式支持 `+ - * / ( )` 运算符，引用的列名必须在 `splitting_columns` 或前面的计算列中。仅对已拆分的行进行计算，未拆分的行保留源表原始值
+- `input.sheet.*.null_check_columns`（可选）：按表（source/reference/payment）定义需检测空值的列名列表。列名为 Excel 实际表头名。空值定义：`None`、空字符串 `""`、纯空白字符串。数字 `0` / `0.0` 不算空值。检测到空值时收集所有错误并中断处理。每行每列独立报告，仅表头的空表不报错，全 `None` 的格式行自动跳过
 - 支付规则表(payment)定义了（公司/employer_name，费用所属中心/project_id）联合键到支付账号的映射关系，为**必需配置**，用于填充每行的支付账号
 - `keep_style`（默认 `true`）：设为 `false` 时跳过样式复制，写入速度可提升 45x 以上。适合不需要保留原格式的场景
 - `write_batch_size`（默认 `500`）：控制批量写入大小和进度输出频率。值越大内存占用稍多，但对写入速度影响很小
@@ -85,6 +86,7 @@ output:
    - `input.sheet.reference` — 参考数据表配置
    - `input.sheet.reference.columns` 下的四个必填字段（`employee_id`、`project_id`、`project_category`、`project_hours`）
    - `input.splitting_columns` — 拆分列列表，必须为非空列表，重复条目会报错
+   - `input.sheet.*.null_check_columns` — 可选，必须是元素为非空字符串的非空列表，重复条目会报错
    - `output.path` — 输出文件路径，不能为空
    - `output.sheet.result.name` — 结果表名称，不能为空
 

@@ -1219,6 +1219,251 @@ class TestExcelSplitter(unittest.TestCase):
         result = evaluate_formula(ast, {'基本工资': 100.0, '岗位工资': None})
         self.assertEqual(result, 100.0)
 
+    # --- Config validation tests for null_check_columns ---
+
+    def test_null_check_columns_not_list(self):
+        """null_check_columns as non-list -> SystemExit."""
+        from main import validate_config
+        config = self._make_minimal_config()
+        config['input']['sheet']['source']['null_check_columns'] = 'not_a_list'
+        with self.assertRaises(SystemExit):
+            validate_config(config)
+
+    def test_null_check_columns_empty_list(self):
+        """null_check_columns as empty list -> SystemExit."""
+        from main import validate_config
+        config = self._make_minimal_config()
+        config['input']['sheet']['source']['null_check_columns'] = []
+        with self.assertRaises(SystemExit):
+            validate_config(config)
+
+    def test_null_check_columns_non_string_entry(self):
+        """null_check_columns with non-string entry -> SystemExit."""
+        from main import validate_config
+        config = self._make_minimal_config()
+        config['input']['sheet']['source']['null_check_columns'] = [123]
+        with self.assertRaises(SystemExit):
+            validate_config(config)
+
+    def test_null_check_columns_duplicate(self):
+        """null_check_columns with duplicate entries -> SystemExit."""
+        from main import validate_config
+        config = self._make_minimal_config()
+        config['input']['sheet']['source']['null_check_columns'] = ['基本工资', '基本工资']
+        with self.assertRaises(SystemExit):
+            validate_config(config)
+
+    # --- Functional tests for null_check_columns ---
+
+    def _setup_null_check_data(self):
+        """Helper: set up standard headers and payment data for null check tests."""
+        source_headers = ['姓名', '工号', '部门', '基本工资', '岗位工资', '费用类别', '费用所属中心', '实际出勤', '分管领导', '工资所属单位']
+        self.source_sheet.append(source_headers)
+
+        reference_headers = ['姓名', '工号', '费用类别', '费用所属中心', '实际出勤']
+        self.reference_sheet.append(reference_headers)
+
+        payment_headers = ['费用所属中心', '公司', '费用类别', '支付账号']
+        self.payment_sheet.append(payment_headers)
+
+    def test_null_check_source_empty_fatal(self):
+        """null_check_columns on source with None value -> SystemExit with details."""
+        self._setup_null_check_data()
+
+        # Row with None in 基本工资 (column index 4, 0-based = 3)
+        self.source_sheet.append(['张三', 'AA', '中国', None, 3000.00, '研发', '研发部', 21, 'BB', '公司A'])
+
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
+
+        self.wb.save('test_input.xlsx')
+
+        self.config['input']['sheet']['source']['null_check_columns'] = ['基本工资']
+
+        from contextlib import redirect_stdout
+        buf = StringIO()
+        try:
+            with redirect_stdout(buf):
+                process_excel(self.config)
+        except SystemExit:
+            pass
+        output = buf.getvalue()
+        self.assertIn('基本工资', output)
+        self.assertIn('第 2 行', output)
+        self.assertIn('工资', output)
+        self.assertIn('空值检测', output)
+
+    def test_null_check_whitespace_is_empty(self):
+        """Whitespace-only string is treated as empty value."""
+        self._setup_null_check_data()
+        self.source_sheet.append(['张三', 'AA', '中国', '   ', 3000.00, '研发', '研发部', 21, 'BB', '公司A'])
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
+        self.wb.save('test_input.xlsx')
+
+        self.config['input']['sheet']['source']['null_check_columns'] = ['基本工资']
+
+        from contextlib import redirect_stdout
+        buf = StringIO()
+        try:
+            with redirect_stdout(buf):
+                process_excel(self.config)
+        except SystemExit:
+            pass
+        self.assertIn('空值检测', buf.getvalue())
+
+    def test_null_check_zero_is_not_empty(self):
+        """Numeric 0 is not treated as empty value."""
+        self._setup_null_check_data()
+        self.source_sheet.append(['张三', 'AA', '中国', 0, 3000.00, '研发', '研发部', 21, 'BB', '公司A'])
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
+        self.wb.save('test_input.xlsx')
+
+        self.config['input']['sheet']['source']['null_check_columns'] = ['基本工资']
+        # Should complete without error (0 is a valid value)
+        process_excel(self.config)
+        self.assertTrue(os.path.exists('test_output.xlsx'))
+
+    def test_null_check_multiple_rows_reported(self):
+        """All rows with empty values are reported."""
+        self._setup_null_check_data()
+        self.source_sheet.append(['张三', 'AA', '中国', None, 3000.00, '研发', '研发部', 21, 'BB', '公司A'])
+        self.source_sheet.append(['李四', 'BB', '中国', None, 2000.00, '研发', '研发部', 21, 'BB', '公司A'])
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
+        self.reference_sheet.append(['李四', 'BB', '研发', '2', 3])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
+        self.wb.save('test_input.xlsx')
+
+        self.config['input']['sheet']['source']['null_check_columns'] = ['基本工资']
+
+        from contextlib import redirect_stdout
+        buf = StringIO()
+        try:
+            with redirect_stdout(buf):
+                process_excel(self.config)
+        except SystemExit:
+            pass
+        output = buf.getvalue()
+        self.assertIn('第 2 行', output)
+        self.assertIn('第 3 行', output)
+
+    def test_null_check_multiple_columns(self):
+        """Both columns are reported when both are empty."""
+        self._setup_null_check_data()
+        self.source_sheet.append(['张三', 'AA', '中国', None, None, '研发', '研发部', 21, 'BB', '公司A'])
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
+        self.wb.save('test_input.xlsx')
+
+        self.config['input']['sheet']['source']['null_check_columns'] = ['基本工资', '岗位工资']
+
+        from contextlib import redirect_stdout
+        buf = StringIO()
+        try:
+            with redirect_stdout(buf):
+                process_excel(self.config)
+        except SystemExit:
+            pass
+        output = buf.getvalue()
+        self.assertIn('基本工资', output)
+        self.assertIn('岗位工资', output)
+
+    def test_null_check_reference(self):
+        """null_check_columns on reference sheet detects empty values."""
+        self._setup_null_check_data()
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, '研发', '研发部', 21, 'BB', '公司A'])
+
+        # Reference row with None in 实际出勤 (5th column, index 4)
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', None])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
+        self.wb.save('test_input.xlsx')
+
+        self.config['input']['sheet']['reference']['null_check_columns'] = ['实际出勤']
+
+        from contextlib import redirect_stdout
+        buf = StringIO()
+        try:
+            with redirect_stdout(buf):
+                process_excel(self.config)
+        except SystemExit:
+            pass
+        output = buf.getvalue()
+        self.assertIn('实际出勤', output)
+        self.assertIn('工时', output)
+
+    def test_null_check_payment(self):
+        """null_check_columns on payment sheet detects empty values."""
+        self._setup_null_check_data()
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, '研发', '研发部', 21, 'BB', '公司A'])
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
+        # Payment row with None in 支付账号 (4th column, index 3)
+        self.payment_sheet.append(['1', '公司A', '研发', None])
+        self.wb.save('test_input.xlsx')
+
+        self.config['input']['sheet']['payment']['null_check_columns'] = ['支付账号']
+
+        from contextlib import redirect_stdout
+        buf = StringIO()
+        try:
+            with redirect_stdout(buf):
+                process_excel(self.config)
+        except SystemExit:
+            pass
+        output = buf.getvalue()
+        self.assertIn('支付账号', output)
+        self.assertIn('支付规则', output)
+
+    def test_null_check_missing_column(self):
+        """Configured column not in sheet headers -> SystemExit with column name."""
+        self._setup_null_check_data()
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, '研发', '研发部', 21, 'BB', '公司A'])
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
+        self.wb.save('test_input.xlsx')
+
+        self.config['input']['sheet']['source']['null_check_columns'] = ['不存在的列']
+
+        from contextlib import redirect_stdout
+        buf = StringIO()
+        try:
+            with redirect_stdout(buf):
+                process_excel(self.config)
+        except SystemExit:
+            pass
+        output = buf.getvalue()
+        self.assertIn('不存在的列', output)
+        self.assertIn('不存在于表', output)
+
+    def test_null_check_header_only_sheets(self):
+        """Sheets with only header rows -> no errors."""
+        self._setup_null_check_data()
+        # Only headers, no data rows
+        self.wb.save('test_input.xlsx')
+
+        self.config['input']['sheet']['source']['null_check_columns'] = ['基本工资']
+        self.config['input']['sheet']['reference']['null_check_columns'] = ['实际出勤']
+        self.config['input']['sheet']['payment']['null_check_columns'] = ['支付账号']
+
+        # Should complete without error (no rows to check)
+        process_excel(self.config)
+        self.assertTrue(os.path.exists('test_output.xlsx'))
+
+    def test_null_check_fully_empty_row_skipped(self):
+        """Fully empty (all None) rows are skipped, not reported."""
+        self._setup_null_check_data()
+        self.source_sheet.append(['张三', 'AA', '中国', 1000.00, 3000.00, '研发', '研发部', 21, 'BB', '公司A'])
+        # Append a fully empty row
+        self.source_sheet.append([None] * 10)
+        self.reference_sheet.append(['张三', 'AA', '研发', '1', 5])
+        self.payment_sheet.append(['1', '公司A', '研发', 'Account_X'])
+        self.wb.save('test_input.xlsx')
+
+        self.config['input']['sheet']['source']['null_check_columns'] = ['基本工资']
+        # Should complete — the all-None row is skipped, and row 1 has valid data
+        process_excel(self.config)
+        self.assertTrue(os.path.exists('test_output.xlsx'))
+
 
 if __name__ == '__main__':
     unittest.main()

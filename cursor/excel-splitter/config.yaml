@@ -13,6 +13,9 @@ input:
         project_category: "费用类别"
         project_hours: "实际出勤"
         employer_name: "工资所属单位"
+      null_check_columns:  # 可选：检测指定列的空值（None / 空字符串 / 纯空白），检测到即报错退出
+        - 基本工资
+        - 岗位工资
     reference:
       name: "输入-工时表"
       columns:
@@ -20,6 +23,8 @@ input:
         project_id: "费用所属中心"
         project_category: "费用类别"
         project_hours: "实际出勤"
+      null_check_columns:  # 可选：检测指定列的空值
+        - 实际出勤
     payment:
       name: "输入-支付规则"
       columns:
@@ -29,6 +34,8 @@ input:
       output_columns:
         - 支付账户
         - 开户行
+      null_check_columns:  # 可选：检测指定列的空值
+        - 支付账户
   splitting_columns:
   - 基本工资
   - 岗位工资

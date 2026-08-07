@@ -33,6 +33,15 @@ def get_column_index(headers, column_name):
     except ValueError:
         return None
 
+
+def is_empty_value(value):
+    """Return True if value is None, '', or a whitespace-only string."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ''
+    return False
+
 import re
 
 
@@ -351,6 +360,47 @@ def populate_payment_account(rows, payment_mapping, config, source_col_map, sour
                 row[out_col_idx - 1].value = matched.get(out_header)
 
 
+
+
+def check_null_columns(source, reference, payment,
+                       source_headers, reference_headers, payment_headers,
+                       config, errors):
+    """Configurable empty-value detection from null_check_columns per sheet.
+
+    Scans configured columns for each sheet (source/reference/payment) and
+    reports every row where the value is None, empty string, or whitespace-only.
+    Fully-empty rows (all cells None) are skipped to avoid noise from
+    formatting-only trailing rows.
+    """
+    sheets_cfg = config['input']['sheet']
+
+    sheet_info = [
+        ('source', source, source_headers),
+        ('reference', reference, reference_headers),
+        ('payment', payment, payment_headers),
+    ]
+
+    for sheet_key, sheet, sheet_headers in sheet_info:
+        sheet_cfg = sheets_cfg.get(sheet_key, {})
+        null_check_columns = sheet_cfg.get('null_check_columns')
+        if not null_check_columns:
+            continue
+
+        sheet_name = sheet_cfg['name']
+
+        for col_name in null_check_columns:
+            col_idx = get_column_index(sheet_headers, col_name)
+            if col_idx is None:
+                errors.append(f"空值检测列 '{col_name}' 不存在于表 '{sheet_name}' 中")
+                continue
+
+            for row_num, row in enumerate(sheet.iter_rows(min_row=2), start=2):
+                if all(cell.value is None for cell in row):
+                    continue
+                if is_empty_value(row[col_idx - 1].value):
+                    errors.append(
+                        f"空值检测：表 '{sheet_name}' 第 {row_num} 行，列 '{col_name}' 为空值"
+                    )
 
 
 def validate_sheets(config, wb):
@@ -703,6 +753,11 @@ def validate_sheets(config, wb):
         errors.append(f"employee_id type mismatch: found types [{types_str}] across "
                      f"source and reference sheets. All employee_id values should be the same type.")
 
+    # --- Null check: configurable empty-value detection ---
+    check_null_columns(source, reference, payment,
+                       source_headers, reference_headers, payment_headers,
+                       config, errors)
+
     # Report all collected errors at once
     if errors:
         error_msg = "Validation errors found:\n" + "\n".join(f"  - {e}" for e in errors)
@@ -935,6 +990,31 @@ def validate_config(config):
                 # so duplicates are naturally removed. No action needed.
         else:
             computed_columns = {}
+
+        # null_check_columns validation (optional, per sheet)
+        for sheet_key, sheet_cfg in sheets.items():
+            null_check_columns = sheet_cfg.get('null_check_columns')
+            if null_check_columns is None:
+                continue
+            if not isinstance(null_check_columns, list) or len(null_check_columns) == 0:
+                errors.append(
+                    f"'input.sheet.{sheet_key}.null_check_columns' must be a non-empty list"
+                )
+                continue
+            seen = set()
+            for col in null_check_columns:
+                if not isinstance(col, str) or col.strip() == '':
+                    errors.append(
+                        f"'input.sheet.{sheet_key}.null_check_columns' entries "
+                        f"must be non-empty strings"
+                    )
+                elif col in seen:
+                    errors.append(
+                        f"Duplicate entry '{col}' in "
+                        f"'input.sheet.{sheet_key}.null_check_columns'"
+                    )
+                else:
+                    seen.add(col)
 
     # Check output section
     out = config.get('output')
