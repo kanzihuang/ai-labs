@@ -480,8 +480,7 @@ def validate_sheets(config, wb):
         payment_output_col_indices[out_header] = get_column_index(payment_headers, out_header)
 
     # --- Payment checks ---
-    # Build payment_mapping and payment_project_ids before reference/source scans
-    payment_project_ids = set()
+    # Build payment_mapping before reference/source scans
     ref_employee_ids = set()
     ref_projects_by_employee = {}  # employee_id -> set of (project_id, project_category) for composite key check
     ref_hours_by_employee = {}  # employee_id -> total_hours (to detect 0-hour rows)
@@ -497,6 +496,9 @@ def validate_sheets(config, wb):
         # Skip rows with empty project_id, employer_name, or project_category
         if proj_id is None or str(proj_id).strip() == '':
             continue
+
+        proj_id_str = str(proj_id).strip()
+
         if employer_name is None or str(employer_name).strip() == '':
             continue
         if proj_category is None or str(proj_category).strip() == '':
@@ -524,8 +526,8 @@ def validate_sheets(config, wb):
             row_values[header] = cell.value
         payment_mapping[pair] = row_values
 
-    # Build set of all project_ids in payment for Check 4 partial check
-    payment_project_ids = set(pid for (_, pid, _) in payment_mapping.keys())
+    # Build lookup set for Check 4: (project_id, project_category) pairs
+    payment_project_category_pairs = set((pid, pcat) for (_, pid, pcat) in payment_mapping.keys())
 
     # --- Consolidated single-pass scan of reference sheet ---
     # Checks 1, 4, 6, 8, 9, and partial 10 (type collection)
@@ -533,7 +535,7 @@ def validate_sheets(config, wb):
                                                  config['input']['sheet']['reference']['columns']['project_category'])
     ref_pairs = set()
     reported_ref_duplicates = set()
-    ref_missing_pids = set()
+    ref_missing_pairs = set()
     reported_empty_ref_id = False
     ref_id_types = set()
 
@@ -587,11 +589,12 @@ def validate_sheets(config, wb):
             else:
                 ref_pairs.add(pair)
 
-        # Check 4: project_id in payment
+        # Check 4: (project_id, project_category) pair in payment
         if proj_id is not None and str(proj_id).strip() != '':
             proj_id_str = str(proj_id).strip()
-            if proj_id_str not in payment_project_ids:
-                ref_missing_pids.add(proj_id_str)
+            proj_cat_str = str(proj_category).strip() if proj_category is not None else ''
+            if (proj_id_str, proj_cat_str) not in payment_project_category_pairs:
+                ref_missing_pairs.add((proj_id_str, proj_cat_str))
 
         # Checks 8 and 9: non-numeric and negative hours
         if hours_val is not None:
@@ -607,10 +610,10 @@ def validate_sheets(config, wb):
                               f"(employee_id='{emp_id}', project_id='{proj_id}')")
 
     # Report Check 4 errors after reference scan
-    if ref_missing_pids:
-        for pid in sorted(ref_missing_pids):
-            errors.append(f"project_id '{pid}' in reference sheet '{reference_sheet}' "
-                         f"has no matching record in sheet '{payment_sheet}'")
+    if ref_missing_pairs:
+        for pid, pcat in sorted(ref_missing_pairs):
+            errors.append(f"(project_id='{pid}', project_category='{pcat}') in reference sheet "
+                         f"'{reference_sheet}' has no matching record in sheet '{payment_sheet}'")
 
     # Check 0h: Zero-hour employees must have at most one distinct project_id in reference
     for emp_id, total_hours in ref_hours_by_employee.items():
